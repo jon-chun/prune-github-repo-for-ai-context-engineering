@@ -1,38 +1,42 @@
 # Repository Distiller Configuration
+# Customized for whitelist-only filtering approach
 # For detailed documentation, see docs/user-manual.md
 
 # AI Coding Environment: 'chat' (default), 'ide', 'agentic', 'cli'
-# This setting can optimize output for different AI-assisted coding workflows
 ai_coding_env: 'chat'
 
-# Maximum file size in megabytes. Files larger than this will be skipped
-# (unless whitelisted, which overrides this limit)
+# Maximum file size in megabytes (applied after whitelist check)
 max_file_size_mb: 5
 
 # ============================================================================
-# WHITELIST RULES (Highest Priority - Always Include)
+# WHITELIST RULES (Highest Priority - ONLY whitelisted items are included)
 # ============================================================================
+# Note: This configuration uses a whitelist-only approach.
+# Only explicitly whitelisted files/directories will be copied.
+
 whitelist:
-  # Specific files to always include (supports glob patterns with *)
+  # Specific files to include (supports glob patterns with *)
   files:
+    # Core project files
     - "README.md"
-    - "LICENSE"
-    - "*.md"  # Include all markdown files
-    - "requirements.txt"
-    - "package.json"
-    - "Makefile"
+    - "pyproject.toml"
+    - "config.yaml"
 
-  # Directories to recursively include (supports glob patterns)
+    # Data files to be sampled (head + tail)
+    - "examples/openai/gpt-5-mini/gold-gpt5mini/project-13_anne-duncan-deflection-misdirection_-at-2025-12-07-21-15-b32f81aa.csv"
+    - "examples/openai/gpt-5-mini/gold-gpt5mini/project-13_anne-duncan-deflection-misdirection_-at-2025-12-07-21-15-b32f81aa.json"
+
+  # Directories to recursively include
   directories:
+    - "output/qa/step5_gold/"
     - "src/"
-    - "docs/"
-    - "tests/"
+    - "src/qa_gold_lib/"
 
 # ============================================================================
-# BLACKLIST RULES (Applied if NOT whitelisted)
+# BLACKLIST RULES (Applied to whitelisted items - for fine-grained exclusion)
 # ============================================================================
 blacklist:
-  # Specific files to exclude (relative paths from repo root)
+  # Specific files to exclude even if in whitelisted directory
   files:
     - ".env"
     - ".env.local"
@@ -42,8 +46,16 @@ blacklist:
     - "yarn.lock"
     - "poetry.lock"
 
-  # File extensions to skip (leading dot optional)
+  # File extensions to skip (within whitelisted directories)
   extensions:
+    # Images and documents
+    - ".png"
+    - ".jpg"
+    - ".jpeg"
+    - ".pdf"
+    - ".md"  # Markdown files excluded except README.md
+
+    # Standard exclusions
     - ".log"
     - ".tmp"
     - ".cache"
@@ -57,20 +69,18 @@ blacklist:
     - ".o"
     - ".a"
     - ".lib"
+
     # Binary data formats
-    - ".png"
-    - ".jpg"
-    - ".jpeg"
     - ".gif"
     - ".bmp"
     - ".ico"
     - ".svg"
-    - ".pdf"
     - ".mp4"
     - ".avi"
     - ".mov"
     - ".mp3"
     - ".wav"
+
     # Office documents
     - ".docx"
     - ".xlsx"
@@ -78,6 +88,7 @@ blacklist:
     - ".doc"
     - ".xls"
     - ".ppt"
+
     # Archives
     - ".zip"
     - ".tar"
@@ -86,14 +97,23 @@ blacklist:
     - ".rar"
 
   # Python-compatible regex patterns for filename matching
+  # These patterns exclude versioned files, step files, and utility files
   patterns:
-    - "_v\\d+\\."  # Matches: script_v1.py, data_v2.json
-    - "_ver\\d+\\." # Matches: file_ver01.txt
-    - "_backup\\d*\\." # Matches: data_backup.csv, file_backup1.json
-    - "\\.bak$"  # Matches: file.bak
-    - "~$"  # Matches: file.txt~
+    # Versioned Python files: matches *_v1.py, *_v2.py, ..., *_v99.py
+    - "_v\d{1,2}\.py$"
 
-  # Directories to exclude (recursive - excludes all contents)
+    # Step-numbered files: matches step1_*.py, step2_*.py, etc.
+    - "^step\d{1,2}"
+
+    # Utility files: matches utils_*.py
+    - "^utils_"
+
+    # Additional common patterns
+    - "_backup\d*\."
+    - "\.bak$"
+    - "~$"
+
+  # Directories to exclude (even within whitelisted directories)
   directories:
     - ".git/"
     - ".svn/"
@@ -106,6 +126,7 @@ blacklist:
     - "venv/"
     - "env/"
     - ".venv/"
+    - ".uv/"
     - "build/"
     - "dist/"
     - "*.egg-info/"
@@ -116,7 +137,6 @@ blacklist:
     - "coverage/"
     - ".coverage/"
     - "htmlcov/"
-    - "examples/ollama/"  # Example: exclude specific example subdirectories
 
 # ============================================================================
 # DATA SAMPLING CONFIGURATION

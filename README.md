@@ -10,9 +10,11 @@ Repository Distiller is a command-line Python utility that creates intelligent, 
 ## Features
 
 - ✅ **Smart Filtering**: Configurable whitelist/blacklist rules with glob pattern support
+- ✅ **Whitelist-Only Mode**: Default blacklist-everything approach with explicit whitelisting
 - ✅ **Data Sampling**: Automatically sample large CSV/JSON/JSONL files (head + tail)
+- ✅ **Regex Patterns**: Filter versioned files, step-numbered scripts, and utility files
 - ✅ **Size Control**: Skip files over configurable size threshold
-- ✅ **Flexible Configuration**: YAML-based configuration with regex pattern support
+- ✅ **Flexible Configuration**: YAML-based configuration with pattern matching
 - ✅ **Dry Run Mode**: Preview actions before executing
 - ✅ **Comprehensive Logging**: Dual-stream logging (console + file) with detailed statistics
 - ✅ **AI-Optimized**: Designed specifically for LLM context preparation
@@ -25,27 +27,30 @@ Repository Distiller is a command-line Python utility that creates intelligent, 
 # Clone or download this repository
 cd repo_distiller_project
 
-# Install dependencies
-pip install pyyaml
+# Install with uv (recommended)
+uv sync
 
-# Make script executable (Unix/Linux/Mac)
-chmod +x repo_distiller.py
+# Or install dependencies manually
+uv add pyyaml
+
+# Verify installation
+uv run python src/repo_distiller.py --version
 ```
 
 ### Basic Usage
 
 ```bash
-# Distill a repository
-python repo_distiller.py /path/to/source /path/to/destination
+# Distill a repository (from project root)
+uv run python src/repo_distiller.py /path/to/source /path/to/destination
 
 # Dry run (preview only)
-python repo_distiller.py /path/to/source /path/to/destination --dry-run
+uv run python src/repo_distiller.py /path/to/source /path/to/destination --dry-run
 
 # Verbose logging
-python repo_distiller.py /path/to/source /path/to/destination --verbose
+uv run python src/repo_distiller.py /path/to/source /path/to/destination --verbose
 
 # Custom configuration
-python repo_distiller.py /path/to/source /path/to/destination --config my_config.yaml
+uv run python src/repo_distiller.py /path/to/source /path/to/destination --config my_config.yaml
 ```
 
 ## Documentation
@@ -53,42 +58,46 @@ python repo_distiller.py /path/to/source /path/to/destination --config my_config
 - **[User Manual](docs/user-manual.md)** - Complete usage guide, configuration reference, and troubleshooting
 - **[Technical Specification](docs/tech-specs.md)** - Architecture, API documentation, and extension guide for AI-assisted development
 
-## Configuration
+## Configuration Example
 
-Edit `config.yaml` to customize filtering behavior:
+This project uses a **whitelist-only approach** by default. Edit `config.yaml` to customize:
 
 ```yaml
 # AI coding environment: 'chat', 'ide', 'agentic', 'cli'
 ai_coding_env: 'chat'
 
-# Maximum file size in MB
+# Maximum file size in MB (applied after whitelist)
 max_file_size_mb: 5
 
-# Whitelist (always include)
+# WHITELIST: Only these are included
 whitelist:
   files:
     - "README.md"
-    - "*.md"
+    - "pyproject.toml"
+    - "config.yaml"
+    # Data files (will be sampled)
+    - "examples/openai/gpt-5-mini/gold-gpt5mini/*.csv"
+    - "examples/openai/gpt-5-mini/gold-gpt5mini/*.json"
+
   directories:
+    - "output/qa/step5_gold/"
     - "src/"
-    - "tests/"
+    - "src/qa_gold_lib/"
 
-# Blacklist (exclude unless whitelisted)
+# BLACKLIST: Exclude from whitelisted items
 blacklist:
-  files:
-    - ".env"
-    - ".gitignore"
   extensions:
-    - ".log"
-    - ".pyc"
     - ".png"
-  patterns:
-    - "_v\\d+\\."  # Matches: file_v1.py
-  directories:
-    - ".git/"
-    - "node_modules/"
+    - ".jpg"
+    - ".pdf"
+    - ".md"  # Except README.md (explicitly whitelisted)
 
-# Data sampling for large files
+  patterns:
+    - "_v\\d{1,2}\\.py$"      # Excludes: *_v1.py, *_v2.py, ..., *_v99.py
+    - "^step\\d{1,2}"         # Excludes: step1_*, step2_*, ...
+    - "^utils_"               # Excludes: utils_*.py
+
+# Data sampling
 data_sampling:
   enabled: true
   target_extensions: [".csv", ".json", ".jsonl"]
@@ -96,44 +105,82 @@ data_sampling:
   tail_rows: 5
 ```
 
+## Project Structure
+
+```
+.
+├── src/
+│   └── repo_distiller.py      # Main executable script
+├── config.yaml                # Configuration file
+├── pyproject.toml             # uv project configuration
+├── README.md                  # This file
+├── docs/
+│   ├── user-manual.md        # User documentation
+│   └── tech-specs.md         # Technical specification
+├── logs/                      # Auto-generated log files
+└── tests/                     # (Future) Test suite
+```
+
 ## Rule Priority
 
 Files are evaluated in this order:
 
 1. **Whitelist** (highest priority) → Include
-2. **Blacklist** → Skip
+2. **Blacklist** (applied to whitelisted items) → Skip
 3. **Data Sampling** → Sample if applicable
-4. **Default** → Copy verbatim
+4. **Default** → If not whitelisted, SKIP (whitelist-only mode)
+
+## Example: Filtering Versioned Files
+
+Given this input directory:
+```
+adjudicate_gold_v1.py
+adjudicate_gold_v2.py
+adjudicate_gold.py
+step1_generate_examples.py
+step2_filter-silver-dataset.py
+utils_fix_annotator_id.py
+eval_models.py
+```
+
+With the provided configuration:
+```
+✓ eval_models.py              (in whitelisted src/ directory)
+✗ adjudicate_gold_v1.py       (matches pattern: _v\d{1,2}\.py$)
+✗ adjudicate_gold_v2.py       (matches pattern: _v\d{1,2}\.py$)
+✓ adjudicate_gold.py          (in whitelisted directory, no version suffix)
+✗ step1_generate_examples.py (matches pattern: ^step\d{1,2})
+✗ step2_filter-silver-dataset.py (matches pattern: ^step\d{1,2})
+✗ utils_fix_annotator_id.py  (matches pattern: ^utils_)
+```
 
 ## Use Cases
 
 ### AI-Assisted Coding
-Prepare repository context for chat-based coding assistants (Claude, ChatGPT, etc.):
+Prepare repository context for chat-based coding assistants:
 
 ```bash
-python repo_distiller.py ./my-project ./my-project-distilled
+uv run python src/repo_distiller.py ./my-project ./my-project-distilled
 # Then paste distilled files into LLM context
 ```
 
 ### Code Review Preparation
-Create lightweight snapshots excluding build artifacts and dependencies:
+Create lightweight snapshots excluding build artifacts:
 
 ```bash
-python repo_distiller.py ./repo ./review-snapshot --dry-run
+uv run python src/repo_distiller.py ./repo ./review-snapshot --dry-run --verbose
 ```
 
-### Documentation Generation
-Extract only documentation and source code:
+### Extract Final Versions Only
+Filter out all versioned files and intermediate steps:
 
 ```yaml
 # config.yaml
-whitelist:
-  directories:
-    - "src/"
-    - "docs/"
-  files:
-    - "*.md"
-    - "*.rst"
+blacklist:
+  patterns:
+    - "_v\\d{1,2}\\.py$"    # Remove: *_v1.py, *_v2.py, etc.
+    - "^step\\d{1,2}"         # Remove: step1_*, step2_*, etc.
+    - "_backup\\d*\\."       # Remove: *_backup.py, *_backup1.csv
 ```
 
 ## Output Example
@@ -149,33 +196,43 @@ Files skipped:        1173
 Errors:               0
 
 Skip reasons breakdown:
-  blacklist_directory               : 892
-  blacklist_ext:.pyc                : 156
-  file_size>5MB                     : 89
-  blacklist_file                    : 36
+  blacklist_pattern:_v\d{1,2}\.py$  : 45
+  blacklist_pattern:^step\d{1,2}     : 28
+  blacklist_pattern:^utils_          : 12
+  blacklist_ext:.md                   : 89
+  blacklist_directory                 : 892
+  not_whitelisted                     : 107
 ======================================================================
 ```
 
 ## Requirements
 
 - Python 3.7+
-- PyYAML (`pip install pyyaml`)
-
-## Project Structure
-
-```
-.
-├── repo_distiller.py          # Main executable
-├── config.yaml                # Configuration file
-├── README.md                  # This file
-├── docs/
-│   ├── user-manual.md        # User documentation
-│   └── tech-specs.md         # Technical specification
-├── logs/                      # Auto-generated log files
-└── tests/                     # (Future) Test suite
-```
+- uv package manager (recommended)
+- PyYAML (`uv add pyyaml`)
 
 ## Development
+
+### Setup Development Environment
+
+```bash
+# Install with dev dependencies
+uv sync --all-extras
+
+# Run tests (when implemented)
+uv run pytest
+
+# Format code
+uv run black src/
+
+# Type checking
+uv run mypy src/
+
+# Linting
+uv run ruff check src/
+```
+
+### Architecture
 
 This project follows spec-driven development practices optimized for AI-assisted coding. See `docs/tech-specs.md` for:
 
@@ -189,9 +246,10 @@ This project follows spec-driven development practices optimized for AI-assisted
 Contributions are welcome! Please:
 
 1. Review `docs/tech-specs.md` for architecture details
-2. Follow existing code style and type hints
-3. Add tests for new features
-4. Update documentation
+2. Follow existing code style (black, ruff)
+3. Add type hints for all functions
+4. Add tests for new features
+5. Update documentation
 
 ## License
 
@@ -199,16 +257,20 @@ MIT License - See LICENSE file for details.
 
 ## Support
 
-- Issues: File via your project repository
 - Documentation: See `docs/` directory
 - Examples: See configuration examples in `config.yaml`
+- Technical details: See `docs/tech-specs.md`
 
 ## Changelog
 
 ### v1.0.0 (2025-12-14)
 - Initial release
 - Core filtering engine with whitelist/blacklist support
+- Whitelist-only mode for secure filtering
 - Data sampling for CSV/JSON/JSONL files
+- Regex pattern matching for versioned files
 - Comprehensive logging and statistics
 - Dry run mode
 - YAML configuration
+- uv package manager support
+- Moved executable code to src/ directory

@@ -4,31 +4,56 @@
 
 Repository Distiller is a command-line utility that creates a filtered, lightweight copy of a code repository optimized for providing context to Large Language Models (LLMs) in AI-assisted coding workflows.
 
+**New in v1.0.0:** Whitelist-only approach, uv package manager support, and advanced regex pattern matching.
+
 ## Installation
 
 ### Prerequisites
 - Python 3.7 or higher
-- PyYAML library
+- uv package manager (recommended)
 
-### Setup
+### Setup with uv (Recommended)
 ```bash
+# Install uv if not already installed
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Clone or download the project
+cd repo_distiller_project
+
+# Install dependencies
+uv sync
+
+# Verify installation
+uv run python src/repo_distiller.py --version
+```
+
+### Setup without uv
+```bash
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
 # Install dependencies
 pip install pyyaml
 
-# Make the script executable (Unix/Linux/Mac)
-chmod +x repo_distiller.py
+# Verify installation
+python src/repo_distiller.py --version
 ```
 
 ## Quick Start
 
 ### Basic Usage
 ```bash
-python repo_distiller.py <source_directory> <destination_directory>
+# From project root with uv
+uv run python src/repo_distiller.py <source_directory> <destination_directory>
+
+# Or without uv
+python src/repo_distiller.py <source_directory> <destination_directory>
 ```
 
 **Example:**
 ```bash
-python repo_distiller.py ./my-project ./my-project-distilled
+uv run python src/repo_distiller.py ./my-project ./my-project-distilled
 ```
 
 ### Common Options
@@ -36,24 +61,24 @@ python repo_distiller.py ./my-project ./my-project-distilled
 #### Dry Run (Preview Mode)
 Preview what actions would be taken without actually copying files:
 ```bash
-python repo_distiller.py ./source ./dest --dry-run
+uv run python src/repo_distiller.py ./source ./dest --dry-run
 ```
 
 #### Verbose Logging
 Enable detailed DEBUG-level logging:
 ```bash
-python repo_distiller.py ./source ./dest --verbose
+uv run python src/repo_distiller.py ./source ./dest --verbose
 ```
 
 #### Custom Configuration
 Use a custom configuration file:
 ```bash
-python repo_distiller.py ./source ./dest --config my_config.yaml
+uv run python src/repo_distiller.py ./source ./dest --config my_config.yaml
 ```
 
 #### Help
 ```bash
-python repo_distiller.py --help
+uv run python src/repo_distiller.py --help
 ```
 
 ## Configuration
@@ -69,8 +94,6 @@ The distiller is controlled by a YAML configuration file (default: `./config.yam
 ai_coding_env: 'chat'  # Options: 'chat', 'ide', 'agentic', 'cli'
 ```
 
-This setting indicates the target AI coding environment and can be used to optimize output formatting.
-
 #### 2. Maximum File Size
 ```yaml
 max_file_size_mb: 5
@@ -80,25 +103,26 @@ Files larger than this size (in MB) will be skipped, **unless** they are explici
 
 #### 3. Whitelist Rules (Highest Priority)
 
-Whitelisted files/directories are **always included**, overriding all blacklist rules and size limits.
+**NEW:** Whitelist-only mode - only explicitly whitelisted items are included.
 
 ```yaml
 whitelist:
   files:
     - "README.md"
+    - "pyproject.toml"
     - "*.md"  # Glob pattern: all markdown files
   directories:
     - "src/"
-    - "tests/"
+    - "output/qa/step5_gold/"
 ```
 
 **Supports glob patterns**:
 - `*` - matches any characters within a filename
-- `**` - matches any directories recursively (use with caution)
+- `**` - matches any directories recursively
 
 #### 4. Blacklist Rules
 
-Applied to files that are NOT whitelisted.
+Applied to files that ARE whitelisted for fine-grained exclusion.
 
 ```yaml
 blacklist:
@@ -107,13 +131,16 @@ blacklist:
     - ".gitignore"
 
   extensions:
-    - ".log"
-    - ".pyc"
     - ".png"
+    - ".jpg"
+    - ".pdf"
+    - ".md"  # Note: README.md is explicitly whitelisted
 
   patterns:  # Python regex patterns
-    - "_v\\d+\\."  # Matches: file_v1.py, file_v2.txt
-    - "\\.bak$"    # Matches: file.bak
+    - "_v\\d{1,2}\\.py$"      # Matches: file_v1.py through file_v99.py
+    - "^step\\d{1,2}"         # Matches: step1_*, step2_*, etc.
+    - "^utils_"               # Matches: utils_*.py
+    - "\\.bak$"                # Matches: file.bak
 
   directories:
     - ".git/"
@@ -147,19 +174,65 @@ data_sampling:
 The distiller applies rules in this exact order for each file:
 
 1. **Whitelist Check** (Highest Priority)
-   - If file/directory is whitelisted → **Include** (proceed to step 3)
+   - If file/directory is whitelisted → Proceed to step 2
+   - If NOT whitelisted → **SKIP** (whitelist-only mode)
 
-2. **Blacklist Check** (If not whitelisted)
+2. **Blacklist Check** (Applied to whitelisted items)
    - Check: specific files, directories, extensions, regex patterns, file size
-   - If any blacklist rule matches → **Skip**
+   - If any blacklist rule matches → **SKIP**
 
 3. **Data Sampling Check**
-   - If file is whitelisted or passed blacklist checks
-   - AND file extension matches `data_sampling.target_extensions`
-   - AND data sampling is enabled → **Sample** instead of full copy
+   - If file extension matches `data_sampling.target_extensions`
+   - AND data sampling is enabled → **SAMPLE** instead of full copy
 
 4. **Default Action**
-   - If no rules match → **Copy** verbatim
+   - If whitelisted and not blacklisted → **COPY** verbatim
+
+## Regex Pattern Examples
+
+### Filter Versioned Files
+
+Exclude all files with version suffixes:
+
+```yaml
+patterns:
+  - "_v\\d{1,2}\\.py$"  # Matches: *_v1.py, *_v2.py, ..., *_v99.py
+```
+
+**Example matches:**
+- `adjudicate_gold_v1.py` ✗
+- `adjudicate_gold_v2.py` ✗
+- `adjudicate_gold_v15.py` ✗
+- `adjudicate_gold.py` ✓ (no version suffix)
+
+### Filter Step-Numbered Files
+
+Exclude workflow step files:
+
+```yaml
+patterns:
+  - "^step\\d{1,2}"  # Matches: step1_*, step2_*, ..., step99_*
+```
+
+**Example matches:**
+- `step1_generate_examples.py` ✗
+- `step2_filter_dataset.py` ✗
+- `step10_final_process.py` ✗
+- `process_step1.py` ✓ (doesn't start with "step")
+
+### Filter Utility Files
+
+Exclude utility scripts:
+
+```yaml
+patterns:
+  - "^utils_"  # Matches: utils_*.py
+```
+
+**Example matches:**
+- `utils_fix_annotator.py` ✗
+- `utils_helper.py` ✗
+- `data_utils.py` ✓ (doesn't start with "utils_")
 
 ## Logging
 
@@ -180,17 +253,18 @@ After completion, the distiller prints a summary report:
 ======================================================================
 DISTILLATION SUMMARY
 ======================================================================
-Total files scanned:  1523
-Files copied:         342
-Files sampled:        8
-Files skipped:        1173
+Total files scanned:  156
+Files copied:         42
+Files sampled:        2
+Files skipped:        112
 Errors:               0
 
 Skip reasons breakdown:
-  blacklist_directory               : 892
-  blacklist_ext:.pyc                : 156
-  file_size>5MB                     : 89
-  blacklist_file                    : 36
+  blacklist_pattern:_v\d{1,2}\.py$  : 45
+  blacklist_pattern:^step\d{1,2}     : 28
+  blacklist_pattern:^utils_          : 12
+  blacklist_ext:.md                   : 18
+  not_whitelisted                     : 9
 ======================================================================
 ```
 
@@ -204,12 +278,12 @@ Skip reasons breakdown:
 
 1. **Always use dry run first** for new configurations:
    ```bash
-   python repo_distiller.py ./source ./dest --dry-run --verbose
+   uv run python src/repo_distiller.py ./source ./dest --dry-run --verbose
    ```
 
-2. **Start with restrictive blacklists**, then whitelist exceptions
+2. **Start with explicit whitelisting** for maximum control
 
-3. **Use glob patterns** for flexible matching
+3. **Use regex patterns** to filter versioned files and intermediate steps
 
 4. **Review the summary report** to ensure expected files are included
 
@@ -226,7 +300,15 @@ Skip reasons breakdown:
 ### Files not being copied as expected
 **Solution**: Run with `--verbose` and `--dry-run` to see decision-making:
 ```bash
-python repo_distiller.py ./source ./dest --dry-run --verbose | grep "filename"
+uv run python src/repo_distiller.py ./source ./dest --dry-run --verbose | grep "filename"
+```
+
+### Regex pattern not matching
+**Solution**: Test your regex in Python:
+```python
+import re
+pattern = re.compile(r"_v\d{1,2}\.py$")
+print(pattern.search("adjudicate_gold_v1.py"))  # Should match
 ```
 
 ### Permission errors
@@ -240,19 +322,19 @@ The distiller is designed to work as part of an LLM context preparation pipeline
 
 ```bash
 # 1. Distill repository
-python repo_distiller.py ./my-repo ./distilled
+uv run python src/repo_distiller.py ./my-repo ./distilled
 
 # 2. Generate context document for LLM
-cat ./distilled/**/*.py > context_for_llm.txt
+find ./distilled -name "*.py" -exec cat {} \; > context_for_llm.txt
 ```
 
 ### Custom Sampling Logic
 
-For specialized data formats, modify the `_sample_csv_file()` or `_sample_json_file()` methods in `repo_distiller.py`.
+For specialized data formats, modify the `_sample_csv_file()` or `_sample_json_file()` methods in `src/repo_distiller.py`.
 
 ## Configuration Examples
 
-### Example 1: Python Project
+### Example 1: Python Project (Final Versions Only)
 ```yaml
 ai_coding_env: 'chat'
 max_file_size_mb: 5
@@ -260,8 +342,7 @@ max_file_size_mb: 5
 whitelist:
   files:
     - "README.md"
-    - "requirements.txt"
-    - "setup.py"
+    - "pyproject.toml"
     - "*.md"
   directories:
     - "src/"
@@ -271,9 +352,11 @@ blacklist:
   extensions:
     - ".pyc"
     - ".pyo"
-    - ".egg-info"
+  patterns:
+    - "_v\\d{1,2}\\.py$"      # Remove versioned files
+    - "^step\\d{1,2}"         # Remove step files
+    - "^utils_"               # Remove utility scripts
   directories:
-    - ".git/"
     - "__pycache__/"
     - "venv/"
     - ".pytest_cache/"
@@ -285,71 +368,45 @@ data_sampling:
   tail_rows: 10
 ```
 
-### Example 2: JavaScript/Node.js Project
-```yaml
-ai_coding_env: 'ide'
-max_file_size_mb: 3
-
-whitelist:
-  files:
-    - "package.json"
-    - "README.md"
-    - "*.md"
-  directories:
-    - "src/"
-    - "lib/"
-    - "test/"
-
-blacklist:
-  files:
-    - "package-lock.json"
-    - "yarn.lock"
-  directories:
-    - "node_modules/"
-    - ".git/"
-    - "dist/"
-    - "build/"
-    - "coverage/"
-  extensions:
-    - ".min.js"
-    - ".map"
-
-data_sampling:
-  enabled: false
-```
-
-### Example 3: Documentation Only
+### Example 2: Extract Gold Dataset Only
 ```yaml
 ai_coding_env: 'chat'
 max_file_size_mb: 10
 
 whitelist:
   files:
-    - "*.md"
-    - "*.rst"
-    - "*.txt"
+    - "README.md"
+    - "config.yaml"
   directories:
-    - "docs/"
+    - "output/qa/step5_gold/"
+    - "src/"
 
 blacklist:
-  directories:
-    - ".git/"
   extensions:
-    - ".pyc"
     - ".png"
     - ".jpg"
     - ".pdf"
+  patterns:
+    - "_v\\d{1,2}\\."
+    - "^step\\d{1,2}"
+  directories:
+    - "__pycache__/"
 
 data_sampling:
-  enabled: false
+  enabled: true
+  target_extensions: [".csv", ".json", ".jsonl"]
+  head_rows: 5
+  tail_rows: 5
 ```
 
 ## Glossary
 
 - **Distillation**: The process of filtering a repository to create a lightweight copy
+- **Whitelist-Only Mode**: Only explicitly whitelisted files/directories are included (default)
 - **Whitelist**: Rules that force inclusion of files/directories (highest priority)
-- **Blacklist**: Rules that exclude files/directories (unless whitelisted)
+- **Blacklist**: Rules that exclude files/directories from whitelisted items
 - **Glob Pattern**: A pattern with wildcards (* and **) for matching multiple files
+- **Regex Pattern**: Python-compatible regular expression for advanced filename matching
 - **Data Sampling**: Creating a partial copy of large data files (head + tail)
 - **Dry Run**: Preview mode that shows actions without executing them
 
@@ -364,6 +421,10 @@ For issues or contributions, refer to the project repository.
 ### v1.0.0 (2025-12-14)
 - Initial release
 - Core filtering engine
+- Whitelist-only mode
+- Regex pattern matching for versioned files
 - Data sampling for CSV/JSON/JSONL
 - Comprehensive logging
 - Dry run mode
+- uv package manager support
+- Moved executable code to src/ directory

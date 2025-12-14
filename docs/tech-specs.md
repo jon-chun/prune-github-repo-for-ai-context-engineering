@@ -2,49 +2,83 @@
 
 This document provides comprehensive technical details for AI-assisted coding and maintenance of the Repository Distiller system.
 
+**Version:** 1.0.0  
+**Updated:** 2025-12-14  
+**Package Manager:** uv  
+**Module Location:** src/repo_distiller.py
+
 ## System Architecture
 
 ### Component Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    CLI Interface (main)                      │
+│                CLI Interface (main)                          │
 │  - Argument parsing (argparse)                              │
 │  - Logging setup                                            │
 └─────────────────────────┬───────────────────────────────────┘
                           │
                           ▼
 ┌─────────────────────────────────────────────────────────────┐
-│              DistillerConfig (from YAML)                     │
+│          DistillerConfig (from YAML)                         │
 │  - Configuration loading                                    │
 │  - Validation and normalization                             │
+│  - Regex pattern compilation                                │
 └─────────────────────────┬───────────────────────────────────┘
                           │
                           ▼
 ┌─────────────────────────────────────────────────────────────┐
-│          RepositoryDistiller (Core Logic)                    │
+│      RepositoryDistiller (Core Logic)                        │
 │  - File system traversal                                    │
-│  - Rule application (whitelist/blacklist)                   │
+│  - Rule application (whitelist → blacklist → sampling)      │
 │  - File processing (copy/sample/skip)                       │
 │  - Statistics tracking                                      │
 └─────────────────────────────────────────────────────────────┘
 ```
 
+### Project Structure
+
+```
+repo_distiller_project/
+├── src/
+│   └── repo_distiller.py      # Main executable module
+├── config.yaml                # Configuration file
+├── pyproject.toml             # uv project configuration
+├── README.md                  # Project overview
+├── LICENSE                    # MIT License
+├── .gitignore                # Git ignore rules
+├── docs/
+│   ├── user-manual.md        # User documentation
+│   └── tech-specs.md         # This file
+├── logs/                      # Auto-generated log files
+└── tests/                     # Future test suite
+```
+
 ### Dependencies
+
+**Runtime:**
+- Python >=3.7
+- PyYAML >=6.0.1
+
+**Development (optional):**
+- pytest >=7.0.0
+- pytest-cov >=4.0.0
+- black >=23.0.0
+- mypy >=1.0.0
+- ruff >=0.1.0
+
+**Package Manager:** uv (recommended)
 
 **Standard Library:**
 - `argparse` - CLI argument parsing
-- `logging` - Dual-stream logging (console + file)
-- `pathlib` - Modern path operations
+- `logging` - Dual-stream logging
+- `pathlib` - Path operations
 - `shutil` - File operations
-- `json`, `csv` - Data file parsing
-- `re` - Regular expression matching
-- `datetime` - Timestamp generation
-- `dataclasses` - Type-safe configuration containers
+- `json`, `csv` - Data parsing
+- `re` - Regex matching
+- `datetime` - Timestamps
+- `dataclasses` - Type-safe containers
 - `enum` - Action enumeration
-
-**External:**
-- `PyYAML` - YAML configuration parsing
 
 ## Data Structures
 
@@ -75,6 +109,10 @@ class FilterStats:
         skipped (int): Files skipped
         errors (int): Errors encountered
         skipped_reasons (Dict[str, int]): Breakdown of skip reasons
+
+    Methods:
+        add_skip_reason(self, reason: str) -> None:
+            Increment counter for a specific skip reason.
     """
     scanned: int = 0
     copied: int = 0
@@ -82,9 +120,6 @@ class FilterStats:
     skipped: int = 0
     errors: int = 0
     skipped_reasons: Dict[str, int] = field(default_factory=dict)
-
-    def add_skip_reason(self, reason: str) -> None:
-        """Increment counter for a specific skip reason."""
 ```
 
 #### DistillerConfig
@@ -95,11 +130,11 @@ class DistillerConfig:
     Configuration container loaded from YAML.
 
     Attributes:
-        max_file_size_mb (float): Maximum file size threshold
+        max_file_size_mb (float): Maximum file size threshold (applied after whitelist)
         whitelist_files (List[str]): Glob patterns for whitelisted files
         whitelist_directories (List[str]): Glob patterns for whitelisted dirs
         blacklist_files (List[str]): Glob patterns for blacklisted files
-        blacklist_extensions (List[str]): File extensions to skip (normalized with leading dot)
+        blacklist_extensions (List[str]): File extensions to skip (normalized with dot)
         blacklist_patterns (List[re.Pattern]): Compiled regex patterns
         blacklist_directories (List[str]): Glob patterns for blacklisted dirs
         data_sampling_enabled (bool): Enable data file sampling
@@ -107,12 +142,20 @@ class DistillerConfig:
         data_sampling_include_header (bool): Include CSV header in sample
         data_sampling_head_rows (int): Number of head rows/objects to sample
         data_sampling_tail_rows (int): Number of tail rows/objects to sample
-        ai_coding_env (str): Target AI coding environment ('chat', 'ide', 'agentic', 'cli')
+        ai_coding_env (str): Target AI coding environment
 
     Methods:
         @staticmethod
         from_yaml(config_path: Path) -> 'DistillerConfig':
             Load and parse configuration from YAML file.
+
+            Processing:
+                1. Loads YAML with yaml.safe_load()
+                2. Compiles regex patterns from strings
+                3. Normalizes extensions (ensures leading dot)
+                4. Normalizes sampling extensions
+                5. Returns populated DistillerConfig instance
+
             Raises:
                 FileNotFoundError: If config file doesn't exist
                 ValueError: If YAML is invalid
@@ -133,10 +176,24 @@ class RepositoryDistiller:
         config (DistillerConfig): Configuration instance
         logger (logging.Logger): Logger instance
         stats (FilterStats): Statistics tracker
-    """
 
-    def __init__(self, config: DistillerConfig, logger: logging.Logger):
-        """Initialize distiller with configuration and logger."""
+    Methods:
+        Public:
+            __init__(config, logger)
+            distill(source_dir, dest_dir, dry_run=False) -> bool
+            determine_action(path, base_path) -> Tuple[FilterAction, Optional[str]]
+            process_file(source, destination, action) -> bool
+
+        Private:
+            _matches_glob_pattern(path, patterns, base_path) -> bool
+            _is_whitelisted(path, base_path) -> bool
+            _is_blacklisted(path, base_path) -> Tuple[bool, Optional[str]]
+            _should_sample_data_file(path) -> bool
+            _sample_csv_file(source, destination) -> bool
+            _sample_json_file(source, destination) -> bool
+            _confirm_overwrite(dest_dir) -> bool
+            _print_summary() -> None
+    """
 ```
 
 #### Public Methods
@@ -148,27 +205,42 @@ def distill(self, source_dir: Path, dest_dir: Path, dry_run: bool = False) -> bo
     Main entry point: perform full repository distillation.
 
     Algorithm:
-        1. Validate source directory exists
-        2. Prepare destination directory (with user confirmation if exists)
-        3. Recursively walk source directory using Path.rglob('*')
-        4. For each file:
-           a. Determine action using determine_action()
-           b. Execute action (or log for dry run)
-           c. Update statistics
+        1. Validate source directory exists and is a directory
+        2. Prepare destination directory:
+           - If exists: prompt user for confirmation, delete if confirmed
+           - Create destination directory
+        3. Walk source directory using Path.rglob('*')
+        4. For each file (skip directories):
+           a. Increment scanned counter
+           b. Call determine_action(path, source_dir)
+           c. If action is SKIP:
+              - Add skip reason to stats
+              - Log and continue
+           d. Otherwise:
+              - Calculate destination path (preserve relative structure)
+              - If dry_run: log action, update stats
+              - If not dry_run: call process_file()
         5. Print summary report
+        6. Return success status (True if errors == 0)
 
     Args:
-        source_dir: Source repository path
-        dest_dir: Destination output path
-        dry_run: If True, simulate without actual file operations
+        source_dir (Path): Source repository path
+        dest_dir (Path): Destination output path
+        dry_run (bool): If True, simulate without actual file operations
 
     Returns:
-        True if successful (errors == 0), False otherwise
+        bool: True if successful (errors == 0), False otherwise
 
     Error Handling:
-        - Catches all exceptions during traversal
-        - Logs errors but continues processing
-        - Returns False if any errors occurred
+        - Validates source exists and is directory (logs error, returns False)
+        - Catches all exceptions during traversal (logs error, returns False)
+        - Individual file errors don't stop processing (logged, counted)
+
+    Side Effects:
+        - Creates/deletes directories
+        - Copies/samples files
+        - Updates self.stats
+        - Logs extensively
     """
 ```
 
@@ -178,36 +250,50 @@ def determine_action(self, path: Path, base_path: Path) -> Tuple[FilterAction, O
     """
     Apply rule priority logic to determine action for a path.
 
-    Rule Application Order:
-        1. Whitelist check (highest priority)
-           - If whitelisted → COPY or SAMPLE (if data file)
+    Rule Application Order (CRITICAL):
+        1. Whitelist check (_is_whitelisted)
+           - If whitelisted:
+             - Check if should sample (_should_sample_data_file)
+             - Return (SAMPLE, None) or (COPY, None)
+           - If NOT whitelisted:
+             - Skip to step 4 (whitelist-only mode)
 
-        2. Blacklist check (if not whitelisted)
-           - Check: specific files, directories, extensions, patterns, size
-           - If blacklisted → SKIP with reason
+        2. Blacklist check (_is_blacklisted) - only if whitelisted
+           - Checks: file size, specific files, directories, extensions, patterns
+           - If blacklisted: return (SKIP, reason)
 
-        3. Data sampling check
-           - If enabled AND extension matches → SAMPLE
+        3. Data sampling check - only if whitelisted and not blacklisted
+           - If data file: return (SAMPLE, None)
 
-        4. Default → COPY
+        4. Default action
+           - If reached here and whitelisted: return (COPY, None)
+           - If not whitelisted: return (SKIP, "not_whitelisted")
 
     Args:
-        path: Path to evaluate
-        base_path: Repository root for relative path calculations
+        path (Path): Path to evaluate
+        base_path (Path): Repository root for relative path calculations
 
     Returns:
-        Tuple of (FilterAction, skip_reason)
-        - skip_reason is None unless action is SKIP
+        Tuple[FilterAction, Optional[str]]:
+            - FilterAction: COPY, SAMPLE, or SKIP
+            - str or None: Skip reason (only if SKIP)
 
     Examples:
-        >>> distiller.determine_action(Path("src/main.py"), Path("."))
-        (FilterAction.COPY, None)
+        Whitelisted file:
+            >>> determine_action(Path("src/main.py"), Path("."))
+            (FilterAction.COPY, None)
 
-        >>> distiller.determine_action(Path("data.csv"), Path("."))
-        (FilterAction.SAMPLE, None)
+        Whitelisted data file:
+            >>> determine_action(Path("data/samples.csv"), Path("."))
+            (FilterAction.SAMPLE, None)
 
-        >>> distiller.determine_action(Path("file.log"), Path("."))
-        (FilterAction.SKIP, "blacklist_ext:.log")
+        Versioned file in whitelisted dir:
+            >>> determine_action(Path("src/script_v1.py"), Path("."))
+            (FilterAction.SKIP, "blacklist_pattern:_v\d{1,2}\.py$")
+
+        Not whitelisted:
+            >>> determine_action(Path("random/file.py"), Path("."))
+            (FilterAction.SKIP, "not_whitelisted")
     """
 ```
 
@@ -218,28 +304,43 @@ def process_file(self, source: Path, destination: Path, action: FilterAction) ->
     Execute the determined action on a file.
 
     Actions:
-        - COPY: Use shutil.copy2() (preserves metadata)
-        - SAMPLE: Delegate to _sample_csv_file() or _sample_json_file()
-        - SKIP: Log and return True
+        COPY:
+            - Use shutil.copy2() to preserve metadata
+            - Increment copied counter
+            - Log at DEBUG level
+
+        SAMPLE:
+            - Determine file type from extension
+            - Delegate to:
+              - _sample_csv_file() for .csv, .tsv
+              - _sample_json_file() for .json, .jsonl
+              - Copy as-is for unknown types (with warning)
+            - Increment sampled counter on success
+            - Increment error counter on failure
+
+        SKIP:
+            - Log at DEBUG level
+            - Increment skipped counter
+            - Return True (not an error)
 
     Args:
-        source: Source file path
-        destination: Destination file path
-        action: Action to perform
+        source (Path): Source file path
+        destination (Path): Destination file path
+        action (FilterAction): Action to perform
 
     Returns:
-        True if successful, False if error occurred
+        bool: True if successful, False if error occurred
 
     Side Effects:
         - Creates parent directories for destination
-        - Updates self.stats counters
-        - Logs action at appropriate level
+        - Modifies self.stats counters
+        - Logs action
 
     Error Handling:
-        - Catches all exceptions
-        - Logs error with full traceback
+        - Wraps all operations in try-except
+        - Logs full error with traceback
         - Increments error counter
-        - Returns False
+        - Returns False on any exception
     """
 ```
 
@@ -252,44 +353,40 @@ def _matches_glob_pattern(self, path: Path, patterns: List[str], base_path: Path
     Check if a path matches any glob pattern in the list.
 
     Matching Logic:
-        - Converts path to relative path from base_path
-        - Normalizes pattern (strips leading ./ and trailing /)
-        - Checks:
-          1. Direct string match
-          2. Directory prefix match (for directory patterns)
-          3. Nested file within directory pattern
-          4. Glob pattern match using Path.match() (supports *)
+        1. Convert path to relative path from base_path
+        2. For each pattern:
+           a. Normalize pattern (strip ./ and trailing /)
+           b. Check direct string match
+           c. Check directory prefix match (for directory patterns)
+           d. Check if file is within directory pattern
+           e. Check glob pattern match using Path.match()
+
+    Glob Pattern Support:
+        - '*' matches any characters within a filename/directory
+        - '**' matches any directories recursively
+        - '?' matches a single character
 
     Args:
-        path: Absolute path to check
-        patterns: List of glob patterns (relative to repo root)
-        base_path: Repository root
+        path (Path): Absolute path to check
+        patterns (List[str]): List of glob patterns (relative to repo root)
+        base_path (Path): Repository root
 
     Returns:
-        True if path matches any pattern
+        bool: True if path matches any pattern
 
     Examples:
         Pattern "src/" matches:
-          - src/ (directory)
-          - src/main.py (file in directory)
-          - src/utils/helper.py (nested file)
+          ✓ src/ (directory)
+          ✓ src/main.py (file in directory)
+          ✓ src/utils/helper.py (nested file)
 
         Pattern "*.md" matches:
-          - README.md
-          - docs/guide.md
-    """
-```
+          ✓ README.md
+          ✓ docs/guide.md
 
-##### _is_whitelisted()
-```python
-def _is_whitelisted(self, path: Path, base_path: Path) -> bool:
-    """
-    Check if path is whitelisted (highest priority check).
-
-    Checks both file and directory whitelists.
-
-    Returns:
-        True if path matches any whitelist rule
+        Pattern "data/**/*.csv" matches:
+          ✓ data/train.csv
+          ✓ data/subset/test.csv
     """
 ```
 
@@ -299,36 +396,39 @@ def _is_blacklisted(self, path: Path, base_path: Path) -> Tuple[bool, Optional[s
     """
     Check if path is blacklisted and return reason.
 
-    Check Order (as specified in requirements point 6):
-        1. File size (if file)
-        2. Specific file blacklist
-        3. Directory blacklist
-        4. Extension blacklist
-        5. Regex pattern blacklist
+    Check Order:
+        1. File size (if file and size > max_file_size_mb)
+           -> return (True, "file_size>XMB")
+
+        2. Specific file blacklist (_matches_glob_pattern with blacklist_files)
+           -> return (True, "blacklist_file")
+
+        3. Directory blacklist (_matches_glob_pattern with blacklist_directories)
+           -> return (True, "blacklist_directory")
+
+        4. Extension blacklist (path.suffix in blacklist_extensions)
+           -> return (True, "blacklist_ext:.xxx")
+
+        5. Regex pattern blacklist (pattern.search(filename) for each pattern)
+           -> return (True, "blacklist_pattern:PATTERN")
+
+        6. If none match: return (False, None)
 
     Args:
-        path: Path to check
-        base_path: Repository root
+        path (Path): Path to check
+        base_path (Path): Repository root
 
     Returns:
-        Tuple of (is_blacklisted, reason_string)
-        - reason examples: "file_size>5MB", "blacklist_ext:.log", "blacklist_pattern:_v\\d+"
-    """
-```
+        Tuple[bool, Optional[str]]:
+            - bool: True if blacklisted
+            - str: Reason string (e.g., "blacklist_pattern:_v\d{1,2}\.py$")
 
-##### _should_sample_data_file()
-```python
-def _should_sample_data_file(self, path: Path) -> bool:
-    """
-    Determine if file should be sampled instead of copied.
-
-    Conditions:
-        - data_sampling_enabled == True
-        - path is a file
-        - file extension in data_sampling_extensions
-
-    Returns:
-        True if file should be sampled
+    Reason String Format:
+        - "file_size>XMB" - File exceeds size limit
+        - "blacklist_file" - Matches blacklist_files pattern
+        - "blacklist_directory" - In blacklisted directory
+        - "blacklist_ext:.xxx" - Has blacklisted extension
+        - "blacklist_pattern:REGEX" - Matches regex pattern
     """
 ```
 
@@ -339,30 +439,51 @@ def _sample_csv_file(self, source: Path, destination: Path) -> bool:
     Sample a CSV/TSV file using Python csv module.
 
     Algorithm:
-        1. Read all rows into memory using csv.reader()
-        2. Separate header (if include_header=True) and data rows
-        3. If total rows <= head + tail: copy all
-        4. Otherwise:
+        1. Open source with csv.reader(), encoding='utf-8', errors='replace'
+        2. Read all rows into memory: all_rows = list(reader)
+        3. Handle empty file: log warning, copy as-is, return True
+        4. Separate header and data:
+           - If include_header: header_rows = [all_rows[0]], data starts at index 1
+           - Otherwise: no header, data starts at index 0
+        5. Check if sampling needed:
+           - If total_data_rows <= (head_rows + tail_rows): copy all rows
+           - Otherwise: sample head and tail
+        6. Write sampled file:
            - Write header (if applicable)
            - Write first head_rows
-           - Write separator comment row
+           - Write separator row: ["... (N rows omitted) ..."]
            - Write last tail_rows
+        7. Log sampling action with row count
+        8. Return True
 
     Args:
-        source: Source CSV file
-        destination: Destination file
+        source (Path): Source CSV file
+        destination (Path): Destination file
 
     Returns:
-        True if successful, False on error
+        bool: True if successful, False on error
 
     Error Handling:
         - Uses 'errors=replace' for encoding issues
-        - Empty files are copied as-is
-        - Logs warnings and errors appropriately
+        - Catches all exceptions, logs error, returns False
 
     Performance Note:
-        Loads entire file into memory. For very large files (GB+), 
-        consider streaming implementation.
+        - Loads entire file into memory
+        - For very large files (GB+), consider streaming implementation
+
+    Example Output (CSV with 100 rows, head_rows=5, tail_rows=5):
+        header
+        row1
+        row2
+        row3
+        row4
+        row5
+        ... (90 rows omitted) ...
+        row96
+        row97
+        row98
+        row99
+        row100
     """
 ```
 
@@ -373,59 +494,52 @@ def _sample_json_file(self, source: Path, destination: Path) -> bool:
     Sample a JSON/JSONL file.
 
     JSONL Handling (.jsonl):
-        - Split on newlines
-        - Treat each line as an object
-        - Sample lines (head + separator + tail)
+        1. Read file content
+        2. Split on newlines, filter empty lines
+        3. If total <= (head + tail): copy as-is
+        4. Otherwise:
+           - Extract head lines
+           - Extract tail lines
+           - Write: head + separator + tail
+        5. Log sampling action
 
     JSON Handling (.json):
-        - Parse with json.loads()
-        - If root is array: sample array elements
-        - If root is object/primitive: copy as-is
-        - Sampled output format:
-          {
-            "_sampled": true,
-            "_total_items": N,
-            "_omitted_items": M,
-            "head": [...],
-            "tail": [...]
-          }
+        1. Read file content
+        2. Parse with json.loads()
+        3. Handle parse errors: log warning, copy as-is
+        4. If root is array:
+           - If len <= (head + tail): copy as-is
+           - Otherwise: create sampled object:
+             {
+               "_sampled": true,
+               "_total_items": N,
+               "_omitted_items": M,
+               "head": [first items],
+               "tail": [last items]
+             }
+        5. If root is object/primitive: copy as-is
+        6. Log sampling action
 
     Args:
-        source: Source JSON/JSONL file
-        destination: Destination file
+        source (Path): Source JSON/JSONL file
+        destination (Path): Destination file
 
     Returns:
-        True if successful, False on error
+        bool: True if successful, False on error
 
     Error Handling:
-        - Invalid JSON: logs warning and copies as-is
+        - Invalid JSON: logs warning, copies as-is
         - Uses 'errors=replace' for encoding issues
-    """
-```
+        - Catches all exceptions, logs error, returns False
 
-##### _confirm_overwrite()
-```python
-def _confirm_overwrite(self, dest_dir: Path) -> bool:
-    """
-    Prompt user for confirmation if destination exists.
-
-    Returns:
-        True if user confirms (input 'yes' or 'y')
-        False otherwise or on EOF/Ctrl+C
-    """
-```
-
-##### _print_summary()
-```python
-def _print_summary(self) -> None:
-    """
-    Print formatted summary report to logger.
-
-    Output includes:
-        - Total files scanned
-        - Files copied, sampled, skipped
-        - Errors
-        - Skip reasons breakdown (sorted by frequency)
+    Example Output (JSON array with 50 items, head=5, tail=5):
+        {
+          "_sampled": true,
+          "_total_items": 50,
+          "_omitted_items": 40,
+          "head": [item1, item2, item3, item4, item5],
+          "tail": [item46, item47, item48, item49, item50]
+        }
     """
 ```
 
@@ -437,34 +551,34 @@ def setup_logging(log_dir: Path, verbose: bool = False) -> logging.Logger:
     """
     Configure dual-stream logging (console + file).
 
-    Setup:
-        - Creates log directory if doesn't exist
-        - Generates timestamped log filename: log_YYYYMMDD_HHMMSS.txt
-        - Configures logger named 'repo_distiller'
-
-    Console Handler:
-        - Format: "LEVEL    | message"
-        - Level: INFO (default) or DEBUG (if verbose)
-        - Stream: stdout
-
-    File Handler:
-        - Format: "timestamp | LEVEL    | function_name | message"
-        - Level: DEBUG (always)
-        - Encoding: UTF-8
+    Implementation:
+        1. Create log_dir if doesn't exist
+        2. Generate timestamp: YYYYMMDD_HHMMSS
+        3. Create log file: log_{timestamp}.txt
+        4. Create logger: 'repo_distiller'
+        5. Set logger level: DEBUG if verbose else INFO
+        6. Add console handler:
+           - Format: "LEVEL    | message"
+           - Level: DEBUG if verbose else INFO
+           - Stream: stdout
+        7. Add file handler:
+           - Format: "timestamp | LEVEL | function_name | message"
+           - Level: DEBUG (always)
+           - Encoding: UTF-8
 
     Args:
-        log_dir: Directory for log files
-        verbose: Enable DEBUG level on console
+        log_dir (Path): Directory for log files
+        verbose (bool): Enable DEBUG level on console
 
     Returns:
-        Configured logger instance
+        logging.Logger: Configured logger instance
 
-    Best Practices:
-        - Use logger.debug() for detailed decision-making
-        - Use logger.info() for user-facing progress
-        - Use logger.warning() for recoverable issues
-        - Use logger.error() for errors that don't stop execution
-        - Use logger.exception() for fatal errors (includes traceback)
+    Usage in Code:
+        logger.debug("Detailed info for debugging")
+        logger.info("User-facing progress info")
+        logger.warning("Recoverable issue")
+        logger.error("Error that doesn't stop execution")
+        logger.exception("Fatal error with traceback")
     """
 ```
 
@@ -472,20 +586,32 @@ def setup_logging(log_dir: Path, verbose: bool = False) -> logging.Logger:
 ```python
 def parse_arguments() -> argparse.Namespace:
     """
-    Parse and validate CLI arguments.
+    Parse and validate CLI arguments using argparse.
+
+    Arguments:
+        Positional:
+            source_dir (Path): Source repository directory
+            destination_dir (Path): Destination directory
+
+        Optional:
+            -c, --config (Path): Config file path (default: ./config.yaml)
+            -d, --dry-run (flag): Preview mode
+            -v, --verbose (flag): Enable DEBUG logging
+            --log-dir (Path): Log directory (default: ./logs)
+            --version (flag): Print version and exit
+
+    Validation:
+        - If not dry_run: checks source_dir exists
+        - Provides helpful error messages via parser.error()
 
     Returns:
-        Namespace with attributes:
+        argparse.Namespace with attributes:
             - source_dir (Path)
             - destination_dir (Path)
             - config (Path)
             - dry_run (bool)
             - verbose (bool)
             - log_dir (Path)
-
-    Validation:
-        - Checks source_dir exists (unless dry_run)
-        - Provides helpful error messages via parser.error()
     """
 ```
 
@@ -496,21 +622,27 @@ def main() -> int:
     Main entry point coordinating the distillation workflow.
 
     Workflow:
-        1. Parse arguments
-        2. Setup logging
-        3. Load configuration
-        4. Create distiller instance
-        5. Execute distillation
-        6. Return exit code
+        1. Parse CLI arguments (parse_arguments)
+        2. Setup logging (setup_logging)
+        3. Load configuration (DistillerConfig.from_yaml)
+        4. Create distiller instance (RepositoryDistiller)
+        5. Execute distillation (distiller.distill)
+        6. Log final status
+        7. Return exit code
 
     Returns:
-        0: Success
-        1: Error occurred
-        130: User cancelled (Ctrl+C)
+        int: Exit code
+            0 - Success
+            1 - Error occurred
+            130 - User cancelled (Ctrl+C)
 
     Error Handling:
-        - Catches KeyboardInterrupt for graceful Ctrl+C handling
-        - Catches all other exceptions, logs with traceback
+        - KeyboardInterrupt: logs "cancelled by user", returns 130
+        - All other exceptions: logs with traceback, returns 1
+
+    Entry Point:
+        if __name__ == '__main__':
+            sys.exit(main())
     """
 ```
 
@@ -521,226 +653,174 @@ def main() -> int:
 # Type: str, Options: ['chat', 'ide', 'agentic', 'cli']
 ai_coding_env: 'chat'
 
-# Type: float, Unit: megabytes
+# Type: float, Unit: megabytes (applied after whitelist check)
 max_file_size_mb: 5
 
+# WHITELIST (required for inclusion - whitelist-only mode)
 whitelist:
-  # Type: List[str], Glob patterns supported
-  files: [...]
-  directories: [...]
+  files: List[str]        # Glob patterns
+  directories: List[str]  # Glob patterns
 
+# BLACKLIST (excludes from whitelisted items)
 blacklist:
-  # Type: List[str], Glob patterns supported
-  files: [...]
+  files: List[str]        # Glob patterns
+  extensions: List[str]   # Leading dot normalized automatically
+  patterns: List[str]     # Python regex patterns (raw strings)
+  directories: List[str]  # Glob patterns
 
-  # Type: List[str], Leading dot normalized automatically
-  extensions: [...]
-
-  # Type: List[str], Python regex patterns (raw strings recommended)
-  patterns: [...]
-
-  # Type: List[str], Glob patterns supported
-  directories: [...]
-
+# DATA SAMPLING
 data_sampling:
-  # Type: bool
-  enabled: true
-
-  # Type: List[str], Leading dot normalized automatically
-  target_extensions: [...]
-
-  # Type: bool
-  include_header: true
-
-  # Type: int
-  head_rows: 5
-  tail_rows: 5
+  enabled: bool
+  target_extensions: List[str]  # Leading dot normalized
+  include_header: bool
+  head_rows: int
+  tail_rows: int
 ```
 
-## Error Handling Strategy
+### Regex Pattern Guidelines
 
-### Error Categories
+**Python Regex Syntax:**
+- Use raw strings in YAML: `"pattern"`
+- Escape backslashes: `\d` not `\d`
+- Anchor patterns: `^` (start), `$` (end)
 
-1. **Configuration Errors** (Fatal - exit immediately)
-   - Missing config file
-   - Invalid YAML syntax
-   - Missing required config fields
+**Common Patterns:**
+```yaml
+patterns:
+  # Versioned files: *_v1.py, *_v2.py, ..., *_v99.py
+  - "_v\d{1,2}\.py$"
 
-2. **Input Validation Errors** (Fatal - exit immediately)
-   - Source directory doesn't exist
-   - Source is not a directory
+  # Step files: step1_*, step2_*, ..., step99_*
+  - "^step\d{1,2}"
 
-3. **File Operation Errors** (Non-fatal - log and continue)
-   - Permission denied on specific file
-   - Encoding errors in data files
-   - Destination write failures
+  # Utility files: utils_*.py
+  - "^utils_"
 
-4. **User Cancellation** (Graceful exit)
-   - Ctrl+C during operation
-   - "No" response to overwrite prompt
+  # Backup files: *_backup.*, *_backup1.*, etc.
+  - "_backup\d*\."
 
-### Recovery Mechanisms
+  # Temporary files: *.bak
+  - "\.bak$"
 
-- **Encoding errors**: Use `errors='replace'` parameter
-- **Permission errors**: Log warning, increment error counter, continue
-- **Invalid regex patterns**: Log warning, skip pattern, continue
-- **Empty/malformed data files**: Log warning, copy as-is
-
-## Performance Considerations
-
-### Memory Usage
-- **File traversal**: Uses `Path.rglob('*')` - iterator-based, minimal memory
-- **Data sampling**: Loads entire file into memory (acceptable for files < max_size_mb)
-- **Large JSON arrays**: Parsed fully with `json.loads()` - consider streaming for GB+ files
-
-### I/O Optimization
-- Uses `shutil.copy2()` for efficient file copying (preserves metadata)
-- Batch directory creation with `mkdir(parents=True, exist_ok=True)`
-
-### Scalability
-- Tested with repositories up to 10,000 files
-- Typical processing speed: 500-1000 files/second (depending on I/O)
+  # Tilde backups: file.txt~
+  - "~$"
+```
 
 ## Testing Strategy
 
-### Unit Tests (Future Implementation)
+### Unit Tests (Future)
 ```python
 # tests/test_filter_logic.py
 def test_whitelist_overrides_blacklist()
-def test_file_size_limit_applied_after_whitelist()
+def test_not_whitelisted_is_skipped()  # NEW: whitelist-only mode
+def test_versioned_file_filtered()     # NEW: regex patterns
+def test_step_file_filtered()          # NEW: regex patterns
+def test_file_size_applied_after_whitelist()
 def test_data_sampling_csv()
 def test_data_sampling_jsonl()
 def test_glob_pattern_matching()
-def test_regex_pattern_matching()
+def test_regex_pattern_matching()      # NEW
 
 # tests/test_config.py
 def test_config_loading()
+def test_regex_compilation()            # NEW
 def test_invalid_yaml()
 def test_missing_config_file()
 
 # tests/test_integration.py
 def test_full_distillation_workflow()
+def test_whitelist_only_mode()          # NEW
 def test_dry_run_mode()
 ```
-
-### Test Data
-Create fixture repositories with:
-- Various file types (code, data, binary)
-- Nested directory structures
-- Edge cases (empty files, large files, special characters)
-
-## Extension Points
-
-### Adding New Data File Formats
-
-To add support for a new data format (e.g., `.xml`, `.parquet`):
-
-1. Add extension to `config.yaml`:
-   ```yaml
-   data_sampling:
-     target_extensions:
-       - ".xml"
-   ```
-
-2. Implement sampling method in `RepositoryDistiller`:
-   ```python
-   def _sample_xml_file(self, source: Path, destination: Path) -> bool:
-       # Implementation here
-       pass
-   ```
-
-3. Update `process_file()` to handle new extension:
-   ```python
-   elif ext == '.xml':
-       success = self._sample_xml_file(source, destination)
-   ```
-
-### Custom Rule Types
-
-To add new filtering rules (e.g., "modified in last N days"):
-
-1. Add configuration field to `DistillerConfig`
-2. Implement check method (e.g., `_is_recently_modified()`)
-3. Update `determine_action()` rule priority logic
 
 ## Debugging Guide
 
 ### Common Issues
 
-**Issue**: Files unexpectedly skipped
+**Issue**: Versioned files not being filtered
 ```bash
-# Solution: Run with verbose logging
-python repo_distiller.py ./source ./dest --verbose --dry-run | grep "SKIP"
+# Solution: Check regex pattern compilation
+uv run python -c "
+import re
+pattern = re.compile(r'_v\d{1,2}\.py$')
+print(pattern.search('script_v1.py'))  # Should match
+"
 ```
 
-**Issue**: Configuration not loading
+**Issue**: Files in whitelisted directory not copied
 ```bash
-# Solution: Validate YAML syntax
-python -c "import yaml; yaml.safe_load(open('config.yaml'))"
+# Solution: Check for blacklist patterns
+uv run python src/repo_distiller.py ./source ./dest --verbose --dry-run | grep "SKIP"
 ```
 
-**Issue**: Glob patterns not matching
+**Issue**: Data files not being sampled
 ```bash
-# Solution: Test pattern in Python REPL
-from pathlib import Path
-path = Path("src/utils/helper.py")
-print(path.match("src/**/*.py"))  # Should print True
+# Solution: Verify extension matches target_extensions in config
+cat config.yaml | grep -A5 "target_extensions"
 ```
 
 ### Strategic Debug Points
 
 Key locations for adding debug statements:
-1. `determine_action()` - see rule application
-2. `_matches_glob_pattern()` - verify pattern matching logic
-3. `process_file()` - confirm file operations
-4. `_sample_*_file()` - debug sampling logic
+1. `determine_action()` - Line before "Step 1: Whitelist check"
+2. `_matches_glob_pattern()` - Before pattern loop
+3. `_is_blacklisted()` - Before each check type
+4. `process_file()` - Before action switch
 
-## Workflow Integration
+## Running the Tool
 
-### AI-Assisted Coding Environments
+### With uv (Recommended)
+```bash
+# From project root
+uv run python src/repo_distiller.py <source> <dest> [options]
 
-#### Chat (Default)
-```yaml
-ai_coding_env: 'chat'
+# Development mode
+uv sync --all-extras
+uv run python src/repo_distiller.py <source> <dest>
 ```
-Optimized for conversational AI coding assistants (Claude, ChatGPT, etc.). Produces complete context suitable for copy-paste into chat interfaces.
 
-#### IDE
-```yaml
-ai_coding_env: 'ide'
+### Without uv
+```bash
+# Activate virtual environment
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+
+# Install dependencies
+pip install pyyaml
+
+# Run
+python src/repo_distiller.py <source> <dest> [options]
 ```
-Optimized for IDE-integrated assistants (Cursor, GitHub Copilot). May include additional metadata or structure for IDE parsing.
 
-#### Agentic
+## Performance Considerations
+
+- **File Traversal**: Iterator-based with Path.rglob('*') - minimal memory
+- **Data Sampling**: Loads files into memory (acceptable for < max_size_mb)
+- **Regex Matching**: Compiled patterns cached in config
+- **Typical Speed**: 500-1000 files/second (I/O dependent)
+
+## Extension Points
+
+### Adding Custom Patterns
+
+To filter additional file types:
+
 ```yaml
-ai_coding_env: 'agentic'
+# config.yaml
+blacklist:
+  patterns:
+    - "your_custom_pattern"
 ```
-Optimized for autonomous coding agents (Aider, OpenHands). Includes structured metadata and clear file boundaries for agent parsing.
 
-#### CLI
-```yaml
-ai_coding_env: 'cli'
+Test pattern:
+```python
+import re
+pattern = re.compile(r"your_custom_pattern")
+print(pattern.search("test_filename.py"))
 ```
-Optimized for CLI-based coding assistants (Claude Code CLI, OpenCode CLI). Follows conventions like AGENTS.md, CLAUDE.md, skills/tools directories.
-
-## Best Practices for AI Context
-
-1. **Limit Context Size**: Keep distilled repos under 100MB for optimal LLM performance
-2. **Include Documentation**: Always whitelist README.md and docs/
-3. **Sample Large Data**: Enable data sampling to avoid token limits
-4. **Test Before Production**: Always run dry-run first
-5. **Version Configuration**: Track config.yaml in version control
-
-## References
-
-- Python argparse: Standard library documentation
-- Python logging: Standard library documentation
-- Glob patterns: Standard library pathlib documentation
-- Data sampling techniques: CSV and JSON module docs
-- LLM context preparation: AI-assisted coding best practices
 
 ---
 
 **Document Version**: 1.0.0  
 **Last Updated**: 2025-12-14  
-**For**: AI-assisted coding and maintenance
+**Optimized for**: AI-assisted coding with uv package manager
