@@ -1,0 +1,142 @@
+# Repository Distiller Configuration
+# For detailed documentation, see docs/user-manual.md
+
+# AI Coding Environment: 'chat' (default), 'ide', 'agentic', 'cli'
+# This setting can optimize output for different AI-assisted coding workflows
+ai_coding_env: 'chat'
+
+# Maximum file size in megabytes. Files larger than this will be skipped
+# (unless whitelisted, which overrides this limit)
+max_file_size_mb: 5
+
+# ============================================================================
+# WHITELIST RULES (Highest Priority - Always Include)
+# ============================================================================
+whitelist:
+  # Specific files to always include (supports glob patterns with *)
+  files:
+    - "README.md"
+    - "LICENSE"
+    - "*.md"  # Include all markdown files
+    - "requirements.txt"
+    - "package.json"
+    - "Makefile"
+
+  # Directories to recursively include (supports glob patterns)
+  directories:
+    - "src/"
+    - "docs/"
+    - "tests/"
+
+# ============================================================================
+# BLACKLIST RULES (Applied if NOT whitelisted)
+# ============================================================================
+blacklist:
+  # Specific files to exclude (relative paths from repo root)
+  files:
+    - ".env"
+    - ".env.local"
+    - ".gitignore"
+    - ".DS_Store"
+    - "package-lock.json"
+    - "yarn.lock"
+    - "poetry.lock"
+
+  # File extensions to skip (leading dot optional)
+  extensions:
+    - ".log"
+    - ".tmp"
+    - ".cache"
+    - ".pyc"
+    - ".pyo"
+    - ".pyd"
+    - ".so"
+    - ".dll"
+    - ".exe"
+    - ".bin"
+    - ".o"
+    - ".a"
+    - ".lib"
+    # Binary data formats
+    - ".png"
+    - ".jpg"
+    - ".jpeg"
+    - ".gif"
+    - ".bmp"
+    - ".ico"
+    - ".svg"
+    - ".pdf"
+    - ".mp4"
+    - ".avi"
+    - ".mov"
+    - ".mp3"
+    - ".wav"
+    # Office documents
+    - ".docx"
+    - ".xlsx"
+    - ".pptx"
+    - ".doc"
+    - ".xls"
+    - ".ppt"
+    # Archives
+    - ".zip"
+    - ".tar"
+    - ".gz"
+    - ".7z"
+    - ".rar"
+
+  # Python-compatible regex patterns for filename matching
+  patterns:
+    - "_v\\d+\\."  # Matches: script_v1.py, data_v2.json
+    - "_ver\\d+\\." # Matches: file_ver01.txt
+    - "_backup\\d*\\." # Matches: data_backup.csv, file_backup1.json
+    - "\\.bak$"  # Matches: file.bak
+    - "~$"  # Matches: file.txt~
+
+  # Directories to exclude (recursive - excludes all contents)
+  directories:
+    - ".git/"
+    - ".svn/"
+    - ".hg/"
+    - "node_modules/"
+    - "__pycache__/"
+    - ".pytest_cache/"
+    - ".mypy_cache/"
+    - ".tox/"
+    - "venv/"
+    - "env/"
+    - ".venv/"
+    - "build/"
+    - "dist/"
+    - "*.egg-info/"
+    - "logs/"
+    - "temp/"
+    - "tmp/"
+    - "cache/"
+    - "coverage/"
+    - ".coverage/"
+    - "htmlcov/"
+    - "examples/ollama/"  # Example: exclude specific example subdirectories
+
+# ============================================================================
+# DATA SAMPLING CONFIGURATION
+# ============================================================================
+# For large data files, copy only head + tail samples instead of full content
+data_sampling:
+  enabled: true
+
+  # File extensions to sample (structured/semi-structured data)
+  target_extensions:
+    - ".csv"
+    - ".tsv"
+    - ".json"
+    - ".jsonl"
+
+  # For CSV/TSV: include header row (true recommended)
+  include_header: true
+
+  # Number of rows/objects to include from the beginning
+  head_rows: 5
+
+  # Number of rows/objects to include from the end
+  tail_rows: 5
