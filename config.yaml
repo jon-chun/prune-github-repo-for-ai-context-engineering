@@ -98,20 +98,21 @@ blacklist:
 
   # Python-compatible regex patterns for filename matching
   # These patterns exclude versioned files, step files, and utility files
+  # IMPORTANT: Use single quotes for raw strings or escape backslashes
   patterns:
     # Versioned Python files: matches *_v1.py, *_v2.py, ..., *_v99.py
-    - "_v\d{1,2}\.py$"
+    - '_v\d{1,2}\.py$'
 
     # Step-numbered files: matches step1_*.py, step2_*.py, etc.
-    - "^step\d{1,2}"
+    - '^step\d{1,2}'
 
     # Utility files: matches utils_*.py
-    - "^utils_"
+    - '^utils_'
 
     # Additional common patterns
-    - "_backup\d*\."
-    - "\.bak$"
-    - "~$"
+    - '_backup\d*\.'
+    - '\.bak$'
+    - '~$'
 
   # Directories to exclude (even within whitelisted directories)
   directories:

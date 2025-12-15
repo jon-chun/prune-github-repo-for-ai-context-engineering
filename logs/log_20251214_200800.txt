@@ -1,0 +1,84 @@
+2025-12-14 20:08:00 | INFO     | setup_logging        | Logging initialized. Log file: logs/log_20251214_200800.txt
+2025-12-14 20:08:00 | INFO     | main                 | Loading configuration from: config.yaml
+2025-12-14 20:08:00 | ERROR    | main                 | Fatal error: Invalid YAML in config file: while scanning a double-quoted scalar
+  in "config.yaml", line 103, column 7
+found unknown escape character 'd'
+  in "config.yaml", line 103, column 11
+Traceback (most recent call last):
+  File "/Users/jonc/code/prune-github-repo-for-ai-context-engineering/./src/repo_distiller.py", line 86, in from_yaml
+    config_data = yaml.safe_load(f)
+                  ^^^^^^^^^^^^^^^^^
+  File "/Users/jonc/code/prune-github-repo-for-ai-context-engineering/.venv/lib/python3.12/site-packages/yaml/__init__.py", line 125, in safe_load
+    return load(stream, SafeLoader)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jonc/code/prune-github-repo-for-ai-context-engineering/.venv/lib/python3.12/site-packages/yaml/__init__.py", line 81, in load
+    return loader.get_single_data()
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jonc/code/prune-github-repo-for-ai-context-engineering/.venv/lib/python3.12/site-packages/yaml/constructor.py", line 49, in get_single_data
+    node = self.get_single_node()
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jonc/code/prune-github-repo-for-ai-context-engineering/.venv/lib/python3.12/site-packages/yaml/composer.py", line 36, in get_single_node
+    document = self.compose_document()
+               ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jonc/code/prune-github-repo-for-ai-context-engineering/.venv/lib/python3.12/site-packages/yaml/composer.py", line 55, in compose_document
+    node = self.compose_node(None, None)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jonc/code/prune-github-repo-for-ai-context-engineering/.venv/lib/python3.12/site-packages/yaml/composer.py", line 84, in compose_node
+    node = self.compose_mapping_node(anchor)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jonc/code/prune-github-repo-for-ai-context-engineering/.venv/lib/python3.12/site-packages/yaml/composer.py", line 133, in compose_mapping_node
+    item_value = self.compose_node(node, item_key)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jonc/code/prune-github-repo-for-ai-context-engineering/.venv/lib/python3.12/site-packages/yaml/composer.py", line 84, in compose_node
+    node = self.compose_mapping_node(anchor)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jonc/code/prune-github-repo-for-ai-context-engineering/.venv/lib/python3.12/site-packages/yaml/composer.py", line 133, in compose_mapping_node
+    item_value = self.compose_node(node, item_key)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jonc/code/prune-github-repo-for-ai-context-engineering/.venv/lib/python3.12/site-packages/yaml/composer.py", line 82, in compose_node
+    node = self.compose_sequence_node(anchor)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jonc/code/prune-github-repo-for-ai-context-engineering/.venv/lib/python3.12/site-packages/yaml/composer.py", line 110, in compose_sequence_node
+    while not self.check_event(SequenceEndEvent):
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jonc/code/prune-github-repo-for-ai-context-engineering/.venv/lib/python3.12/site-packages/yaml/parser.py", line 98, in check_event
+    self.current_event = self.state()
+                         ^^^^^^^^^^^^
+  File "/Users/jonc/code/prune-github-repo-for-ai-context-engineering/.venv/lib/python3.12/site-packages/yaml/parser.py", line 379, in parse_block_sequence_first_entry
+    return self.parse_block_sequence_entry()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jonc/code/prune-github-repo-for-ai-context-engineering/.venv/lib/python3.12/site-packages/yaml/parser.py", line 384, in parse_block_sequence_entry
+    if not self.check_token(BlockEntryToken, BlockEndToken):
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jonc/code/prune-github-repo-for-ai-context-engineering/.venv/lib/python3.12/site-packages/yaml/scanner.py", line 116, in check_token
+    self.fetch_more_tokens()
+  File "/Users/jonc/code/prune-github-repo-for-ai-context-engineering/.venv/lib/python3.12/site-packages/yaml/scanner.py", line 251, in fetch_more_tokens
+    return self.fetch_double()
+           ^^^^^^^^^^^^^^^^^^^
+  File "/Users/jonc/code/prune-github-repo-for-ai-context-engineering/.venv/lib/python3.12/site-packages/yaml/scanner.py", line 655, in fetch_double
+    self.fetch_flow_scalar(style='"')
+  File "/Users/jonc/code/prune-github-repo-for-ai-context-engineering/.venv/lib/python3.12/site-packages/yaml/scanner.py", line 666, in fetch_flow_scalar
+    self.tokens.append(self.scan_flow_scalar(style))
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jonc/code/prune-github-repo-for-ai-context-engineering/.venv/lib/python3.12/site-packages/yaml/scanner.py", line 1149, in scan_flow_scalar
+    chunks.extend(self.scan_flow_scalar_non_spaces(double, start_mark))
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jonc/code/prune-github-repo-for-ai-context-engineering/.venv/lib/python3.12/site-packages/yaml/scanner.py", line 1223, in scan_flow_scalar_non_spaces
+    raise ScannerError("while scanning a double-quoted scalar", start_mark,
+yaml.scanner.ScannerError: while scanning a double-quoted scalar
+  in "config.yaml", line 103, column 7
+found unknown escape character 'd'
+  in "config.yaml", line 103, column 11
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/jonc/code/prune-github-repo-for-ai-context-engineering/./src/repo_distiller.py", line 700, in main
+    config = DistillerConfig.from_yaml(args.config)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jonc/code/prune-github-repo-for-ai-context-engineering/./src/repo_distiller.py", line 90, in from_yaml
+    raise ValueError(f"Invalid YAML in config file: {e}")
+ValueError: Invalid YAML in config file: while scanning a double-quoted scalar
+  in "config.yaml", line 103, column 7
+found unknown escape character 'd'
+  in "config.yaml", line 103, column 11
