@@ -7,26 +7,25 @@ context to Large Language Models in AI-assisted coding workflows.
 
 Usage:
     python src/repo_distiller.py <source_dir> <destination_dir> [options]
-    # Or from project root:
     uv run python src/repo_distiller.py <source_dir> <destination_dir> [options]
 
-Author: Generated via AI-assisted spec-driven development
-Version: 1.0.1 (Path resolution fix)
+Version: 1.1.1 (Priority Cascade + filename veto enhancements)
 License: MIT
 """
 
 import argparse
-import logging
-import sys
-import shutil
-import json
 import csv
+import json
+import logging
 import re
-from pathlib import Path
-from datetime import datetime
-from typing import Dict, List, Optional, Set, Tuple
+import shutil
+import sys
+from collections import deque
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
+from pathlib import Path, PurePosixPath
+from typing import Dict, List, Optional, Set, Tuple
 
 try:
     import yaml
@@ -56,7 +55,7 @@ class FilterStats:
     errors: int = 0
     skipped_reasons: Dict[str, int] = field(default_factory=dict)
 
-    def add_skip_reason(self, reason: str):
+    def add_skip_reason(self, reason: str) -> None:
         """Track skip reasons for summary reporting."""
         self.skipped_reasons[reason] = self.skipped_reasons.get(reason, 0) + 1
 
@@ -71,6 +70,8 @@ class DistillerConfig:
     blacklist_extensions: List[str]
     blacklist_patterns: List[re.Pattern]
     blacklist_directories: List[str]
+    blacklist_filename_substrings: List[str]
+    blacklist_datetime_stamp_yyyymmdd: bool
     data_sampling_enabled: bool
     data_sampling_extensions: Set[str]
     data_sampling_include_header: bool
@@ -78,49 +79,65 @@ class DistillerConfig:
     data_sampling_tail_rows: int
     ai_coding_env: str = 'chat'
 
-    @staticmethod
-    def from_yaml(config_path: Path) -> 'DistillerConfig':
-        """Load and parse configuration from YAML file."""
+    
+@staticmethod
+def from_yaml(config_path: Path) -> 'DistillerConfig':
+    """Load and parse configuration from YAML file."""
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config_data = yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Configuration file not found: {config_path}")
+    except yaml.YAMLError as e:
+        raise ValueError(f"Invalid YAML in config file: {e}")
+
+    blacklist_cfg = config_data.get('blacklist', {}) or {}
+    whitelist_cfg = config_data.get('whitelist', {}) or {}
+    sampling_cfg = config_data.get('data_sampling', {}) or {}
+
+    # Parse and compile regex patterns (filename-only)
+    patterns: List[re.Pattern] = []
+    for pattern_str in blacklist_cfg.get('patterns', []) or []:
         try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config_data = yaml.safe_load(f)
-        except FileNotFoundError:
-            raise FileNotFoundError(f"Configuration file not found: {config_path}")
-        except yaml.YAMLError as e:
-            raise ValueError(f"Invalid YAML in config file: {e}")
+            patterns.append(re.compile(pattern_str))
+        except re.error as e:
+            logging.warning(f"Invalid regex pattern '{pattern_str}': {e}")
 
-        # Parse and compile regex patterns
-        patterns = []
-        for pattern_str in config_data.get('blacklist', {}).get('patterns', []):
-            try:
-                patterns.append(re.compile(pattern_str))
-            except re.error as e:
-                logging.warning(f"Invalid regex pattern '{pattern_str}': {e}")
+    # Filename substring blacklist (case-insensitive contains checks)
+    filename_substrings = blacklist_cfg.get('filename_substrings', []) or []
+    if not isinstance(filename_substrings, list):
+        filename_substrings = []
 
-        # Normalize extensions (ensure leading dot)
-        extensions = config_data.get('blacklist', {}).get('extensions', [])
-        normalized_exts = [ext if ext.startswith('.') else f'.{ext}' for ext in extensions]
+    # Datetime-stamp blacklist flag (YYYYMMDD in filename)
+    datetime_stamp_yyyymmdd = blacklist_cfg.get('datetime_stamp_yyyymmdd', True)
+    if not isinstance(datetime_stamp_yyyymmdd, bool):
+        datetime_stamp_yyyymmdd = True
 
-        # Parse data sampling config
-        data_sampling = config_data.get('data_sampling', {})
-        sampling_exts = data_sampling.get('target_extensions', [])
-        normalized_sampling_exts = {ext if ext.startswith('.') else f'.{ext}' for ext in sampling_exts}
+    # Normalize extensions (ensure leading dot)
+    extensions = blacklist_cfg.get('extensions', []) or []
+    normalized_exts = [ext if str(ext).startswith('.') else f'.{ext}' for ext in extensions]
 
-        return DistillerConfig(
-            max_file_size_mb=config_data.get('max_file_size_mb', 5.0),
-            whitelist_files=config_data.get('whitelist', {}).get('files', []),
-            whitelist_directories=config_data.get('whitelist', {}).get('directories', []),
-            blacklist_files=config_data.get('blacklist', {}).get('files', []),
-            blacklist_extensions=normalized_exts,
-            blacklist_patterns=patterns,
-            blacklist_directories=config_data.get('blacklist', {}).get('directories', []),
-            data_sampling_enabled=data_sampling.get('enabled', True),
-            data_sampling_extensions=normalized_sampling_exts,
-            data_sampling_include_header=data_sampling.get('include_header', True),
-            data_sampling_head_rows=data_sampling.get('head_rows', 5),
-            data_sampling_tail_rows=data_sampling.get('tail_rows', 5),
-            ai_coding_env=config_data.get('ai_coding_env', 'chat')
-        )
+    # Parse data sampling config
+    sampling_exts = sampling_cfg.get('target_extensions', []) or []
+    normalized_sampling_exts = {ext if str(ext).startswith('.') else f'.{ext}' for ext in sampling_exts}
+
+    return DistillerConfig(
+        max_file_size_mb=float(config_data.get('max_file_size_mb', 5.0)),
+        whitelist_files=whitelist_cfg.get('files', []) or [],
+        whitelist_directories=whitelist_cfg.get('directories', []) or [],
+        blacklist_files=blacklist_cfg.get('files', []) or [],
+        blacklist_extensions=normalized_exts,
+        blacklist_patterns=patterns,
+        blacklist_directories=blacklist_cfg.get('directories', []) or [],
+        blacklist_filename_substrings=filename_substrings,
+        blacklist_datetime_stamp_yyyymmdd=datetime_stamp_yyyymmdd,
+        data_sampling_enabled=bool(sampling_cfg.get('enabled', True)),
+        data_sampling_extensions=normalized_sampling_exts,
+        data_sampling_include_header=bool(sampling_cfg.get('include_header', True)),
+        data_sampling_head_rows=int(sampling_cfg.get('head_rows', 5)),
+        data_sampling_tail_rows=int(sampling_cfg.get('tail_rows', 5)),
+        ai_coding_env=str(config_data.get('ai_coding_env', 'chat'))
+    )
 
 
 # ============================================================================
@@ -128,16 +145,7 @@ class DistillerConfig:
 # ============================================================================
 
 def setup_logging(log_dir: Path, verbose: bool = False) -> logging.Logger:
-    """
-    Configure logging with both console and file handlers.
-
-    Args:
-        log_dir: Directory for log files
-        verbose: If True, set log level to DEBUG
-
-    Returns:
-        Configured logger instance
-    """
+    """Configure logging with both console and file handlers."""
     log_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = log_dir / f"log_{timestamp}.txt"
@@ -151,19 +159,15 @@ def setup_logging(log_dir: Path, verbose: bool = False) -> logging.Logger:
     # Console handler - concise format
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(logging.DEBUG if verbose else logging.INFO)
-    console_format = logging.Formatter(
-        '%(levelname)-8s | %(message)s'
-    )
-    console_handler.setFormatter(console_format)
+    console_handler.setFormatter(logging.Formatter('%(levelname)-8s | %(message)s'))
 
     # File handler - detailed format
     file_handler = logging.FileHandler(log_file, encoding='utf-8')
     file_handler.setLevel(logging.DEBUG)
-    file_format = logging.Formatter(
-        '%(asctime)s | %(levelname)-8s | %(funcName)-20s | %(message)s',
+    file_handler.setFormatter(logging.Formatter(
+        '%(asctime)s | %(levelname)-8s | %(funcName)-24s | %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    file_handler.setFormatter(file_format)
+    ))
 
     logger.addHandler(console_handler)
     logger.addHandler(file_handler)
@@ -184,236 +188,296 @@ class RepositoryDistiller:
         self.logger = logger
         self.stats = FilterStats()
 
-    def _matches_glob_pattern(self, path: Path, patterns: List[str], base_path: Path) -> bool:
-        """
-        Check if a path matches any glob pattern in the list.
+    # -------------------------
+    # Path / pattern utilities
+    # -------------------------
 
-        Args:
-            path: Absolute path to check
-            patterns: List of glob patterns
-            base_path: Absolute base repository path for relative matching
-
-        Returns:
-            True if path matches any pattern
-        """
-        # Ensure we're working with absolute paths
+    @staticmethod
+    def _to_rel_posix(path: Path, base_path: Path) -> Optional[str]:
+        """Return a POSIX-style relative path string, or None if not relative."""
         path = path.resolve()
         base_path = base_path.resolve()
-
         try:
-            rel_path = path.relative_to(base_path)
+            rel = path.relative_to(base_path)
         except ValueError:
-            self.logger.debug(
-                f"Skipping glob checks for path outside repository root: {path}"
-            )
-            return False
-        rel_path_str = str(rel_path)
+            return None
+        return rel.as_posix()
 
-        for pattern in patterns:
-            # Normalize pattern for consistent matching
-            pattern_normalized = pattern.strip('./').rstrip('/')
+    @staticmethod
+    def _normalize_pattern(pattern: str) -> str:
+        """Normalize config patterns to forward-slash, no leading ./"""
+        p = (pattern or "").strip().replace('\\', '/')
+        while p.startswith('./'):
+            p = p[2:]
+        return p
 
-            # Direct match
-            if rel_path_str == pattern_normalized:
+    @staticmethod
+    def _has_wildcards(pattern: str) -> bool:
+        return any(ch in pattern for ch in ['*', '?', '['])
+
+    def _match_file_patterns(self, rel_posix: str, patterns: List[str]) -> bool:
+        """Match file patterns (exact or glob) against a relative posix path."""
+        rel_path = PurePosixPath(rel_posix)
+        for raw in patterns:
+            pat = self._normalize_pattern(raw)
+            pat = pat.rstrip('/')  # file patterns should not rely on trailing slash
+            if not pat:
+                continue
+
+            # Exact match
+            if not self._has_wildcards(pat) and rel_posix == pat:
                 return True
 
-            # Directory prefix match (for directory patterns)
-            if path.is_dir() and rel_path_str.startswith(pattern_normalized):
-                return True
-
-            # Check if file is within a directory pattern
-            if '/' in pattern_normalized:
-                pattern_parts = Path(pattern_normalized).parts
-                rel_parts = rel_path.parts
-                if len(rel_parts) >= len(pattern_parts):
-                    if rel_parts[:len(pattern_parts)] == pattern_parts:
-                        return True
-
-            # Glob pattern matching (supports *)
-            if '*' in pattern:
+            # Glob match
+            if self._has_wildcards(pat):
                 try:
-                    # Use pathlib's match for glob patterns
-                    if rel_path.match(pattern_normalized):
+                    if rel_path.match(pat):
                         return True
                 except Exception as e:
-                    self.logger.warning(f"Invalid glob pattern '{pattern}': {e}")
-
+                    self.logger.warning(f"Invalid glob pattern '{raw}': {e}")
         return False
 
-    def _is_whitelisted(self, path: Path, base_path: Path) -> bool:
-        """Check if path is whitelisted (highest priority)."""
-        # File whitelist
-        if self._matches_glob_pattern(path, self.config.whitelist_files, base_path):
-            self.logger.debug(f"WHITELIST[file]: {path.relative_to(base_path)}")
-            return True
+    def _match_dir_patterns(self, rel_posix: str, patterns: List[str]) -> bool:
+        """Match directory patterns by prefix semantics and optional glob."""
+        rel_path = PurePosixPath(rel_posix)
+        for raw in patterns:
+            pat = self._normalize_pattern(raw)
+            if not pat:
+                continue
 
-        # Directory whitelist
-        if self._matches_glob_pattern(path, self.config.whitelist_directories, base_path):
-            self.logger.debug(f"WHITELIST[dir]: {path.relative_to(base_path)}")
-            return True
+            pat = pat.rstrip('/')
 
+            # Non-glob directory pattern: prefix match
+            if not self._has_wildcards(pat):
+                if rel_posix == pat or rel_posix.startswith(pat + '/'):
+                    return True
+                continue
+
+            # Glob directory pattern:
+            # - direct match (covers patterns like "src/**")
+            # - prefix match by appending "/**"
+            try:
+                if rel_path.match(pat) or rel_path.match(pat + '/**'):
+                    return True
+            except Exception as e:
+                self.logger.warning(f"Invalid glob pattern '{raw}': {e}")
         return False
 
-    def _is_blacklisted(self, path: Path, base_path: Path) -> Tuple[bool, Optional[str]]:
-        """
-        Check if path is blacklisted and return the reason.
+    # -------------------------
+    # Sampling decision helpers
+    # -------------------------
 
-        Returns:
-            Tuple of (is_blacklisted, reason)
-        """
-        # File size check (applied after whitelist per requirements)
-        if path.is_file():
-            size_mb = path.stat().st_size / (1024 * 1024)
-            if size_mb > self.config.max_file_size_mb:
-                return True, f"file_size>{self.config.max_file_size_mb}MB"
+    def _filename_contains_yyyymmdd_stamp(self, filename: str) -> Optional[str]:
+        """Return the matched YYYYMMDD substring if present and valid, else None."""
+        if not self.config.blacklist_datetime_stamp_yyyymmdd:
+            return None
 
-        # Specific file blacklist
-        if self._matches_glob_pattern(path, self.config.blacklist_files, base_path):
-            return True, "blacklist_file"
+        for m in re.finditer(r"(?<!\d)(\d{8})(?!\d)", filename):
+            candidate = m.group(1)
+            try:
+                datetime.strptime(candidate, "%Y%m%d")
+                return candidate
+            except Exception:
+                continue
+        return None
 
-        # Directory blacklist
-        if self._matches_glob_pattern(path, self.config.blacklist_directories, base_path):
-            return True, "blacklist_directory"
+    def _filename_contains_blacklisted_substring(self, filename: str) -> Optional[str]:
+        """Return the configured substring that matched (case-insensitive), else None."""
+        substrings = self.config.blacklist_filename_substrings or []
+        if not substrings:
+            return None
 
-        # Extension blacklist
-        if path.suffix.lower() in self.config.blacklist_extensions:
-            return True, f"blacklist_ext:{path.suffix}"
-
-        # Regex pattern blacklist
-        filename = path.name
-        for pattern in self.config.blacklist_patterns:
-            if pattern.search(filename):
-                return True, f"blacklist_pattern:{pattern.pattern}"
-
-        return False, None
+        haystack = filename.upper()
+        for raw in substrings:
+            if not isinstance(raw, str):
+                continue
+            needle = raw.strip().upper()
+            if not needle:
+                continue
+            if needle in haystack:
+                return raw
+        return None
 
     def _should_sample_data_file(self, path: Path) -> bool:
-        """Determine if file should be sampled instead of copied verbatim."""
         if not self.config.data_sampling_enabled:
             return False
-
         if not path.is_file():
             return False
-
         return path.suffix.lower() in self.config.data_sampling_extensions
+
+    # -------------------------
+    # Priority Cascade decision
+
+        # -------------------------
 
     def determine_action(self, path: Path, base_path: Path) -> Tuple[FilterAction, Optional[str]]:
         """
-        Determine what action to take for a given path.
+        Determine action using a Tiered Priority Cascade:
 
-        Args:
-            path: Absolute path to evaluate
-            base_path: Absolute repository base path
+          Tier 1 (Golden Ticket): whitelist.files
+            - Force include (COPY/SAMPLE), bypassing size and Tier 4 general exclusions.
 
-        Returns:
-            Tuple of (action, skip_reason)
+          Tier 2 (Explicit Veto): blacklist.files, blacklist.patterns
+            - Force exclude.
+
+          Tier 3 (Scope): whitelist.directories
+            - Must be inside at least one whitelisted directory to proceed.
+
+          Tier 4 (Sanity): blacklist.directories, blacklist.extensions, max_file_size_mb
+            - General exclusions applied only after Tier 3 passes.
         """
-        # Step 1: Whitelist check (highest priority)
-        if self._is_whitelisted(path, base_path):
-            # Whitelisted files can still be sampled if they match criteria
+        path = path.resolve()
+        base_path = base_path.resolve()
+
+        rel_posix = self._to_rel_posix(path, base_path)
+        if rel_posix is None:
+            return FilterAction.SKIP, "outside_repository_root"
+
+        # --- Tier 1: Golden Ticket (explicit file whitelist) ---
+        if self._match_file_patterns(rel_posix, self.config.whitelist_files):
             if self._should_sample_data_file(path):
-                return FilterAction.SAMPLE, None
-            return FilterAction.COPY, None
+                return FilterAction.SAMPLE, "tier1_whitelist_file_sampled"
+            return FilterAction.COPY, "tier1_whitelist_file"
 
-        # Step 2: Blacklist check
-        is_blacklisted, reason = self._is_blacklisted(path, base_path)
-        if is_blacklisted:
-            return FilterAction.SKIP, reason
+        # --- Tier 2: Explicit Veto (explicit file blacklist + filename regex patterns) ---
+        if self._match_file_patterns(rel_posix, self.config.blacklist_files):
+            return FilterAction.SKIP, "tier2_blacklist_file"
 
-        # Step 3: Data sampling check
+        filename = path.name
+        # Tier 2b: Datetime-stamp veto (YYYYMMDD)
+        stamp = self._filename_contains_yyyymmdd_stamp(filename)
+        if stamp:
+            return FilterAction.SKIP, f"tier2_blacklist_datetime_stamp:{stamp}"
+
+        # Tier 2c: Substring vetoes (case-insensitive)
+        sub = self._filename_contains_blacklisted_substring(filename)
+        if sub:
+            return FilterAction.SKIP, f"tier2_blacklist_filename_substring:{sub}"
+
+        for pattern in self.config.blacklist_patterns:
+            try:
+                if pattern.search(filename):
+                    return FilterAction.SKIP, f"tier2_blacklist_pattern:{pattern.pattern}"
+            except Exception as e:
+                self.logger.warning(f"Regex evaluation failed for '{pattern.pattern}': {e}")
+
+        # --- Tier 3: Scope check (whitelist-only mode for directories) ---
+        if not self._match_dir_patterns(rel_posix, self.config.whitelist_directories):
+            return FilterAction.SKIP, "tier3_not_in_whitelist_scope"
+
+        # --- Tier 4: Sanity checks (general exclusions) ---
+        if self._match_dir_patterns(rel_posix, self.config.blacklist_directories):
+            return FilterAction.SKIP, "tier4_blacklist_directory"
+
+        if path.suffix.lower() in self.config.blacklist_extensions:
+            return FilterAction.SKIP, f"tier4_blacklist_ext:{path.suffix.lower()}"
+
+        if path.is_file():
+            size_mb = path.stat().st_size / (1024 * 1024)
+            if size_mb > self.config.max_file_size_mb:
+                return FilterAction.SKIP, f"tier4_file_size>{self.config.max_file_size_mb}MB"
+
+        # Final: sample vs copy (within allowed scope)
         if self._should_sample_data_file(path):
-            return FilterAction.SAMPLE, None
+            return FilterAction.SAMPLE, "tier4_sampled"
+        return FilterAction.COPY, "tier4_copied"
 
-        # Step 4: Default action (not whitelisted = skip in whitelist-only mode)
-        return FilterAction.SKIP, "not_whitelisted"
+    # =========================================================================
+    # Sampling implementations
+    # =========================================================================
 
-    def _sample_csv_file(self, source: Path, destination: Path) -> bool:
+    def _sample_delimited_file(self, source: Path, destination: Path, delimiter: str) -> bool:
         """
-        Sample a CSV file by copying header + head rows + tail rows.
+        Stream-sample a delimited text file (CSV/TSV) by writing:
+          [header?] + first N rows + separator row + last M rows
 
-        Returns:
-            True if successful, False otherwise
+        This avoids loading the entire file into memory.
         """
         try:
-            # Ensure absolute paths
             source = source.resolve()
             destination = destination.resolve()
+            destination.parent.mkdir(parents=True, exist_ok=True)
+
+            include_header = self.config.data_sampling_include_header
+            head_n = max(0, int(self.config.data_sampling_head_rows))
+            tail_n = max(0, int(self.config.data_sampling_tail_rows))
+
+            header: Optional[List[str]] = None
+            head_rows: List[List[str]] = []
+            tail_rows: deque = deque(maxlen=tail_n)
+            total_data_rows = 0
+            num_cols = 1
 
             with open(source, 'r', encoding='utf-8', newline='', errors='replace') as src:
-                reader = csv.reader(src)
+                reader = csv.reader(src, delimiter=delimiter)
 
-                # Read all rows into memory (for tail access)
-                all_rows = list(reader)
+                for row_idx, row in enumerate(reader):
+                    # Track columns for nicer separator formatting
+                    if row and len(row) > num_cols:
+                        num_cols = len(row)
 
-                if len(all_rows) == 0:
-                    self.logger.warning(f"Empty CSV file: {source}")
-                    shutil.copy2(source, destination)
-                    return True
+                    if row_idx == 0 and include_header:
+                        header = row
+                        continue
 
-                # Determine header
-                has_header = self.config.data_sampling_include_header
-                header_rows = [all_rows[0]] if has_header and len(all_rows) > 0 else []
-                data_start_idx = 1 if has_header else 0
+                    total_data_rows += 1
+                    if len(head_rows) < head_n:
+                        head_rows.append(row)
+                    tail_rows.append(row)
 
-                # Calculate head and tail
-                data_rows = all_rows[data_start_idx:]
-                total_data_rows = len(data_rows)
-
-                if total_data_rows <= (self.config.data_sampling_head_rows + self.config.data_sampling_tail_rows):
-                    # File is small enough, copy all
-                    with open(destination, 'w', encoding='utf-8', newline='') as dst:
-                        writer = csv.writer(dst)
-                        writer.writerows(all_rows)
-                else:
-                    # Sample head and tail
-                    head = data_rows[:self.config.data_sampling_head_rows]
-                    tail = data_rows[-self.config.data_sampling_tail_rows:]
-
-                    with open(destination, 'w', encoding='utf-8', newline='') as dst:
-                        writer = csv.writer(dst)
-
-                        # Write header
-                        if header_rows:
-                            writer.writerows(header_rows)
-
-                        # Write head
-                        writer.writerows(head)
-
-                        # Write separator comment
-                        separator = [f"... ({total_data_rows - len(head) - len(tail)} rows omitted) ..."]
-                        writer.writerow(separator)
-
-                        # Write tail
-                        writer.writerows(tail)
-
-                self.logger.info(f"SAMPLED[CSV]: {source.name} ({len(all_rows)} rows)")
+            # Empty file: copy intact
+            if header is None and total_data_rows == 0:
+                self.logger.warning(f"Empty delimited file: {source}")
+                shutil.copy2(source, destination)
                 return True
 
+            # Small enough: copy intact
+            if total_data_rows <= (head_n + tail_n):
+                shutil.copy2(source, destination)
+                self.logger.info(f"SAMPLED[DELIM - copied intact]: {source.name} ({total_data_rows} data rows)")
+                return True
+
+            omitted = total_data_rows - len(head_rows) - len(tail_rows)
+
+            with open(destination, 'w', encoding='utf-8', newline='') as dst:
+                writer = csv.writer(dst, delimiter=delimiter)
+
+                if header is not None:
+                    writer.writerow(header)
+                    if len(header) > num_cols:
+                        num_cols = len(header)
+
+                for r in head_rows:
+                    writer.writerow(r)
+
+                note = f"... ({omitted} rows omitted) ..."
+                sep_row = [note] + ([''] * max(0, num_cols - 1))
+                writer.writerow(sep_row)
+
+                for r in list(tail_rows):
+                    writer.writerow(r)
+
+            self.logger.info(f"SAMPLED[DELIM]: {source.name} ({total_data_rows} data rows)")
+            return True
+
         except Exception as e:
-            self.logger.error(f"Error sampling CSV {source.name}: {e}")
+            self.logger.error(f"Error sampling delimited file {source.name}: {e}")
             return False
 
     def _sample_json_file(self, source: Path, destination: Path) -> bool:
-        """
-        Sample a JSON/JSONL file by copying head + tail objects.
-
-        Returns:
-            True if successful, False otherwise
-        """
+        """Sample a JSON/JSONL file by copying head + tail objects."""
         try:
-            # Ensure absolute paths
             source = source.resolve()
             destination = destination.resolve()
+            destination.parent.mkdir(parents=True, exist_ok=True)
 
-            with open(source, 'r', encoding='utf-8', errors='replace') as src:
-                # Handle JSONL (newline-delimited JSON) by streaming to avoid loading the whole file
-                if source.suffix.lower() == '.jsonl':
-                    from collections import deque
-                    head = []
-                    tail = deque(maxlen=self.config.data_sampling_tail_rows)
-                    total_objects = 0
+            # JSONL: stream lines
+            if source.suffix.lower() == '.jsonl':
+                head: List[str] = []
+                tail: deque = deque(maxlen=max(0, int(self.config.data_sampling_tail_rows)))
+                total_objects = 0
 
-                    # Stream lines: collect head (first N non-empty lines) and tail (last M non-empty lines)
+                with open(source, 'r', encoding='utf-8', errors='replace') as src:
                     for raw_line in src:
                         line = raw_line.rstrip('\n\r')
                         if not line.strip():
@@ -423,147 +487,122 @@ class RepositoryDistiller:
                             head.append(line)
                         tail.append(line)
 
-                    # Empty file -> copy as-is
-                    if total_objects == 0:
-                        self.logger.warning(f"Empty JSONL file: {source}")
-                        shutil.copy2(source, destination)
-                        return True
-
-                    # If small enough, copy everything
-                    if total_objects <= (self.config.data_sampling_head_rows + self.config.data_sampling_tail_rows):
-                        shutil.copy2(source, destination)
-                    else:
-                        omitted = total_objects - len(head) - len(tail)
-                        with open(destination, 'w', encoding='utf-8') as dst:
-                            if head:
-                                dst.write('\n'.join(head))
-                                dst.write('\n\n')
-                            dst.write(f"... ({omitted} objects omitted) ...\n\n")
-                            dst.write('\n'.join(list(tail)))
-
-                    self.logger.info(f"SAMPLED[JSONL]: {source.name} ({total_objects} objects)")
-                    return True
-
-                # Non-JSONL: read full content (used for regular JSON handling below)
-                content = src.read().strip()
- 
-                # Handle regular JSON (array or object)
-                try:
-                    data = json.loads(content)
-                except json.JSONDecodeError as e:
-                    self.logger.warning(f"Invalid JSON in {source.name}: {e}. Copying as-is.")
+                if total_objects == 0:
+                    self.logger.warning(f"Empty JSONL file: {source}")
                     shutil.copy2(source, destination)
                     return True
- 
-                # If JSON is an array, sample it
-                if isinstance(data, list):
-                    total_items = len(data)
- 
-                    head_limit = max(0, int(self.config.data_sampling_head_rows))
-                    tail_limit = max(0, int(self.config.data_sampling_tail_rows))
- 
-                    if total_items <= (head_limit + tail_limit):
-                        shutil.copy2(source, destination)
-                        self.logger.info(f"SAMPLED[JSON - copied intact]: {source.name} ({total_items} items)")
-                        return True
- 
-                    head = data[:head_limit]
-                    tail = data[-tail_limit:] if tail_limit > 0 else []
- 
-                    sampled = {
-                        "_sampled": True,
-                        "_total_items": total_items,
-                        "_omitted_items": total_items - len(head) - len(tail),
-                        "head": head,
-                        "tail": tail
-                    }
- 
-                    try:
-                        with open(destination, 'w', encoding='utf-8') as dst:
-                            json.dump(sampled, dst, indent=2, ensure_ascii=False)
-                    except Exception as e:
-                        self.logger.error(f"Failed writing sampled JSON to {destination}: {e}")
-                        return False
- 
-                    self.logger.info(f"SAMPLED[JSON]: {source.name} ({total_items} items)")
+
+                if total_objects <= (self.config.data_sampling_head_rows + self.config.data_sampling_tail_rows):
+                    shutil.copy2(source, destination)
+                    self.logger.info(f"SAMPLED[JSONL - copied intact]: {source.name} ({total_objects} objects)")
                     return True
- 
-                # JSON is an object or primitive: copy-as-is
-                shutil.copy2(source, destination)
-                self.logger.debug(f"JSON object/primitive (not sampled): {source.name}")
+
+                omitted = total_objects - len(head) - len(tail)
+                with open(destination, 'w', encoding='utf-8') as dst:
+                    if head:
+                        dst.write('\n'.join(head))
+                        dst.write('\n\n')
+                    dst.write(f"... ({omitted} objects omitted) ...\n\n")
+                    dst.write('\n'.join(list(tail)))
+
+                self.logger.info(f"SAMPLED[JSONL]: {source.name} ({total_objects} objects)")
                 return True
+
+            # Regular JSON: load and sample arrays only
+            with open(source, 'r', encoding='utf-8', errors='replace') as src:
+                content = src.read().strip()
+
+            try:
+                data = json.loads(content) if content else None
+            except json.JSONDecodeError as e:
+                self.logger.warning(f"Invalid JSON in {source.name}: {e}. Copying as-is.")
+                shutil.copy2(source, destination)
+                return True
+
+            if isinstance(data, list):
+                total_items = len(data)
+                head_limit = max(0, int(self.config.data_sampling_head_rows))
+                tail_limit = max(0, int(self.config.data_sampling_tail_rows))
+
+                if total_items <= (head_limit + tail_limit):
+                    shutil.copy2(source, destination)
+                    self.logger.info(f"SAMPLED[JSON - copied intact]: {source.name} ({total_items} items)")
+                    return True
+
+                head = data[:head_limit]
+                tail = data[-tail_limit:] if tail_limit > 0 else []
+
+                sampled = {
+                    "_sampled": True,
+                    "_total_items": total_items,
+                    "_omitted_items": total_items - len(head) - len(tail),
+                    "head": head,
+                    "tail": tail,
+                }
+
+                with open(destination, 'w', encoding='utf-8') as dst:
+                    json.dump(sampled, dst, indent=2, ensure_ascii=False)
+
+                self.logger.info(f"SAMPLED[JSON]: {source.name} ({total_items} items)")
+                return True
+
+            # Objects/primitives: copy as-is
+            shutil.copy2(source, destination)
+            self.logger.debug(f"JSON object/primitive (not sampled): {source.name}")
+            return True
 
         except Exception as e:
             self.logger.error(f"Error sampling JSON {source.name}: {e}")
             return False
 
+    # =========================================================================
+    # File processing & distillation
+    # =========================================================================
+
     def process_file(self, source: Path, destination: Path, action: FilterAction) -> bool:
-        """
-        Process a single file according to the determined action.
-
-        Args:
-            source: Absolute source file path
-            destination: Absolute destination file path
-            action: Action to perform
-
-        Returns:
-            True if successful, False otherwise
-        """
+        """Process a single file according to the determined action."""
         try:
-            # Ensure absolute paths
             source = source.resolve()
             destination = destination.resolve()
-
             destination.parent.mkdir(parents=True, exist_ok=True)
 
             if action == FilterAction.COPY:
                 shutil.copy2(source, destination)
-                self.logger.debug(f"COPIED: {source.name}")
+                self.logger.debug(f"COPIED: {source}")
                 self.stats.copied += 1
                 return True
 
-            elif action == FilterAction.SAMPLE:
-                # Determine file type and sample accordingly
+            if action == FilterAction.SAMPLE:
                 ext = source.suffix.lower()
-
-                if ext == '.csv' or ext == '.tsv':
-                    success = self._sample_csv_file(source, destination)
+                if ext == '.csv':
+                    ok = self._sample_delimited_file(source, destination, delimiter=',')
+                elif ext == '.tsv':
+                    ok = self._sample_delimited_file(source, destination, delimiter='\t')
                 elif ext in {'.json', '.jsonl'}:
-                    success = self._sample_json_file(source, destination)
+                    ok = self._sample_json_file(source, destination)
                 else:
-                    self.logger.warning(f"Unknown data file type for sampling: {ext}. Copying as-is.")
+                    self.logger.warning(f"Unknown sampling type '{ext}' for {source}. Copying as-is.")
                     shutil.copy2(source, destination)
-                    success = True
+                    ok = True
 
-                if success:
+                if ok:
                     self.stats.sampled += 1
                 else:
                     self.stats.errors += 1
-                return success
+                return ok
 
-            else:  # SKIP
-                self.logger.debug(f"SKIPPED: {source.name}")
-                self.stats.skipped += 1
-                return True
+            # SKIP should be handled by caller loop
+            self.stats.skipped += 1
+            return True
 
         except Exception as e:
-            self.logger.error(f"Error processing {source.name}: {e}")
+            self.logger.error(f"Error processing {source}: {e}")
             self.stats.errors += 1
             return False
 
     def distill(self, source_dir: Path, dest_dir: Path, dry_run: bool = False) -> bool:
-        """
-        Main distillation process: walk source directory and filter to destination.
-
-        Args:
-            source_dir: Source repository directory (will be resolved to absolute)
-            dest_dir: Destination directory (will be resolved to absolute)
-            dry_run: If True, only simulate actions without copying
-
-        Returns:
-            True if successful, False if errors occurred
-        """
-        # CRITICAL FIX: Resolve all paths to absolute paths
+        """Main distillation process: walk source directory and filter to destination."""
+        # Resolve all paths to absolute paths (prevents relative_to() mismatch errors)
         source_dir = source_dir.resolve()
         dest_dir = dest_dir.resolve()
 
@@ -575,7 +614,6 @@ class RepositoryDistiller:
         if not source_dir.exists():
             self.logger.error(f"Source directory does not exist: {source_dir}")
             return False
-
         if not source_dir.is_dir():
             self.logger.error(f"Source path is not a directory: {source_dir}")
             return False
@@ -589,42 +627,33 @@ class RepositoryDistiller:
                 shutil.rmtree(dest_dir)
             dest_dir.mkdir(parents=True, exist_ok=True)
 
-        # Walk the source directory
+        # Walk the source directory (files only)
         try:
             for path in source_dir.rglob('*'):
-                self.stats.scanned += 1
-
-                # Only process files (directories are created as needed)
                 if not path.is_file():
                     continue
 
-                # Ensure we're working with absolute paths
+                self.stats.scanned += 1
                 path = path.resolve()
 
-                try:
-                    rel_path = path.relative_to(source_dir)
-                except ValueError:
-                    self.logger.debug(f"Skipping path outside source root: {path}")
+                rel_posix = self._to_rel_posix(path, source_dir)
+                if rel_posix is None:
                     self.stats.skipped += 1
+                    self.stats.add_skip_reason("outside_repository_root")
                     continue
 
-                # Determine action
-                action, skip_reason = self.determine_action(path, source_dir)
+                action, reason = self.determine_action(path, source_dir)
 
-                # Log and track
                 if action == FilterAction.SKIP:
-                    if skip_reason:
-                        self.stats.add_skip_reason(skip_reason)
-                    self.logger.debug(f"SKIP[{skip_reason}]: {rel_path}")
                     self.stats.skipped += 1
+                    self.stats.add_skip_reason(reason or "skip")
+                    self.logger.debug(f"SKIP[{reason}]: {rel_posix}")
                     continue
 
-                # Construct destination path
-                dest_path = dest_dir / rel_path
+                dest_path = dest_dir / Path(rel_posix)
 
-                # Execute action
                 if dry_run:
-                    self.logger.info(f"[DRY RUN] {action.value}: {rel_path}")
+                    self.logger.info(f"[DRY RUN] {action.value}: {rel_posix}")
                     if action == FilterAction.COPY:
                         self.stats.copied += 1
                     elif action == FilterAction.SAMPLE:
@@ -638,16 +667,13 @@ class RepositoryDistiller:
             self.logger.error(traceback.format_exc())
             return False
 
-        # Print summary
         self._print_summary()
-
         return self.stats.errors == 0
 
     def _confirm_overwrite(self, dest_dir: Path) -> bool:
         """Prompt user to confirm overwriting existing destination."""
         print(f"\nWARNING: Destination directory exists: {dest_dir}")
         print("All contents will be deleted. Continue? (yes/no): ", end='')
- 
         try:
             response = input().strip().lower()
             return response in {'yes', 'y'}
@@ -655,7 +681,7 @@ class RepositoryDistiller:
             print()
             return False
 
-    def _print_summary(self):
+    def _print_summary(self) -> None:
         """Print a summary report of the distillation process."""
         self.logger.info("\n" + "=" * 70)
         self.logger.info("DISTILLATION SUMMARY")
@@ -665,12 +691,11 @@ class RepositoryDistiller:
         self.logger.info(f"Files sampled:        {self.stats.sampled}")
         self.logger.info(f"Files skipped:        {self.stats.skipped}")
         self.logger.info(f"Errors:               {self.stats.errors}")
- 
+
         if self.stats.skipped_reasons:
             self.logger.info("\nSkip reasons breakdown:")
             for reason, count in sorted(self.stats.skipped_reasons.items(), key=lambda x: -x[1]):
-                self.logger.info(f"  {reason:30s}: {count:>6d}")
- 
+                self.logger.info(f"  {reason:34s}: {count:>6d}")
         self.logger.info("=" * 70 + "\n")
 
 
@@ -685,98 +710,51 @@ def parse_arguments() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Basic usage (from project root)
   python src/repo_distiller.py ./my-repo ./distilled-repo
-
-  # Or with uv
   uv run python src/repo_distiller.py ./my-repo ./distilled-repo
-
-  # Dry run to preview actions
   python src/repo_distiller.py ./my-repo ./distilled-repo --dry-run
-
-  # Verbose logging with custom config
   python src/repo_distiller.py ./my-repo ./distilled-repo -c custom_config.yaml -v
 
 For more information, see docs/user-manual.md
         """
     )
 
-    parser.add_argument(
-        'source_dir',
-        type=Path,
-        help='Source repository directory to distill'
-    )
-
-    parser.add_argument(
-        'destination_dir',
-        type=Path,
-        help='Destination directory for distilled output'
-    )
-
-    parser.add_argument(
-        '-c', '--config',
-        type=Path,
-        default=Path('./config.yaml'),
-        help='Path to YAML configuration file (default: ./config.yaml)'
-    )
-
-    parser.add_argument(
-        '-d', '--dry-run',
-        action='store_true',
-        help='Preview actions without actually copying files'
-    )
-
-    parser.add_argument(
-        '-v', '--verbose',
-        action='store_true',
-        help='Enable verbose logging (DEBUG level)'
-    )
-
-    parser.add_argument(
-        '--log-dir',
-        type=Path,
-        default=Path('./logs'),
-        help='Directory for log files (default: ./logs)'
-    )
-
-    parser.add_argument(
-        '--version',
-        action='version',
-        version='Repository Distiller v1.0.1'
-    )
+    parser.add_argument('source_dir', type=Path, help='Source repository directory to distill')
+    parser.add_argument('destination_dir', type=Path, help='Destination directory for distilled output')
+    parser.add_argument('-c', '--config', type=Path, default=Path('./config.yaml'),
+                        help='Path to YAML configuration file (default: ./config.yaml)')
+    parser.add_argument('-d', '--dry-run', action='store_true', help='Preview actions without copying')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose logging (DEBUG)')
+    parser.add_argument('--log-dir', type=Path, default=Path('./logs'),
+                        help='Directory for log files (default: ./logs)')
+    parser.add_argument('--version', action='version', version='Repository Distiller v1.1.1')
 
     args = parser.parse_args()
 
-    # CRITICAL FIX: Resolve all paths to absolute paths
+    # Resolve all paths to absolute paths
     args.source_dir = args.source_dir.resolve()
     args.destination_dir = args.destination_dir.resolve()
     args.config = args.config.resolve()
     args.log_dir = args.log_dir.resolve()
 
-    # Validate source directory exists
-    if not args.dry_run and not args.source_dir.exists():
+    # Validate source directory exists (even for dry-run)
+    if not args.source_dir.exists():
         parser.error(f"Source directory does not exist: {args.source_dir}")
 
     return args
 
 
 def main() -> int:
-    """Main entry point for the repository distiller."""
     args = parse_arguments()
-
-    # Setup logging
     logger = setup_logging(args.log_dir, verbose=args.verbose)
 
     try:
-        # Load configuration
         logger.info(f"Loading configuration from: {args.config}")
         config = DistillerConfig.from_yaml(args.config)
         logger.info(f"Configuration loaded successfully (AI Coding Env: {config.ai_coding_env})")
 
-        # Create distiller instance
         distiller = RepositoryDistiller(config, logger)
 
-        # Execute distillation
         success = distiller.distill(
             source_dir=args.source_dir,
             dest_dir=args.destination_dir,
@@ -786,13 +764,13 @@ def main() -> int:
         if success:
             logger.info("✓ Distillation completed successfully")
             return 0
-        else:
-            logger.error("✗ Distillation completed with errors")
-            return 1
+
+        logger.error("✗ Distillation completed with errors")
+        return 1
 
     except KeyboardInterrupt:
         logger.info("\nOperation cancelled by user")
-        return 130  # Standard exit code for Ctrl+C
+        return 130
 
     except Exception as e:
         logger.exception(f"Fatal error: {e}")

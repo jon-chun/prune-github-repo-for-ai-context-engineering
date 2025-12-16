@@ -1,61 +1,97 @@
 # Repository Distiller Configuration
-# Customized for whitelist-only filtering approach
-# For detailed documentation, see docs/user-manual.md
+# ---------------------------------------------------------------------------
+# This configuration is designed for a whitelist-first, "Priority Cascade" model:
+#   Tier 1: whitelist.files           (Golden Ticket / force include)
+#   Tier 2: blacklist.files/patterns  (Explicit veto / force exclude)
+#   Tier 3: whitelist.directories    (Scope gate for whitelist-only safety)
+#   Tier 4: general exclusions        (dirs/ext/size) applied after Tier 3
+#
+# Notes:
+# - Regex patterns in YAML should use SINGLE QUOTES to avoid escape issues.
+# - Glob patterns are evaluated against repository-relative POSIX paths (forward slashes).
+# ---------------------------------------------------------------------------
 
-# AI Coding Environment: 'chat' (default), 'ide', 'agentic', 'cli'
+# AI coding environment: used only for reporting/metadata in logs
 ai_coding_env: 'chat'
 
-# Maximum file size in megabytes (applied after whitelist check)
+# General file-size cap (MB) applied at Tier 4 (after directory scope),
+# and bypassed for Tier 1 explicit file whitelists.
 max_file_size_mb: 5
 
 # ============================================================================
-# WHITELIST RULES (Highest Priority - ONLY whitelisted items are included)
+# WHITELIST RULES
 # ============================================================================
-# Note: This configuration uses a whitelist-only approach.
-# Only explicitly whitelisted files/directories will be copied.
-
 whitelist:
-  # Specific files to include (supports glob patterns with *)
+  # Tier 1 "Golden Ticket" file includes. These are force-included even if they
+  # live under a generally blacklisted directory or exceed max_file_size_mb.
   files:
-    # Core project files
     - "README.md"
+    - "LICENSE"
     - "pyproject.toml"
+    - "requirements.txt"
     - "config.yaml"
+    - "src/repo_distiller.py"
+    - "docs/tech-specs.md"
+    - "docs/user-manual.md"
 
-    # Data files to be sampled (head + tail)
-    - "examples/openai/gpt-5-mini/gold-gpt5mini/project-13_anne-duncan-deflection-misdirection_-at-2025-12-07-21-15-b32f81aa.csv"
-    - "examples/openai/gpt-5-mini/gold-gpt5mini/project-13_anne-duncan-deflection-misdirection_-at-2025-12-07-21-15-b32f81aa.json"
-
-  # Directories to recursively include
+  # Tier 3 scope directories. Files must be inside at least one of these
+  # directories unless they are included via Tier 1 whitelist.files.
   directories:
-    - "output/qa/step5_gold/"
     - "src/"
-    - "src/qa_gold_lib/"
+    - "docs/"
+    - "tests/"
 
 # ============================================================================
-# BLACKLIST RULES (Applied to whitelisted items - for fine-grained exclusion)
+# BLACKLIST RULES
 # ============================================================================
 blacklist:
-  # Specific files to exclude even if in whitelisted directory
+  # Tier 2 explicit veto files (exact/glob match)
   files:
     - ".env"
-    - ".env.local"
-    - ".gitignore"
+    - ".env.*"
     - ".DS_Store"
+    - "poetry.lock"
     - "package-lock.json"
     - "yarn.lock"
-    - "poetry.lock"
 
-  # File extensions to skip (within whitelisted directories)
+  # Tier 2 case-insensitive filename substring vetoes
+  # IMPORTANT: This is a raw "contains" match against the filename (not path).
+  # Example: "my_BACKUP_notes.txt" will be skipped.
+  #
+  # WARNING: Short tokens like "BU" are intentionally broad and can match
+  # unexpectedly (e.g., "build"). If that becomes noisy, remove or replace with
+  # a longer token in your local config.
+  filename_substrings:
+    - "BACKUP"
+    - "BU"
+    - "OLD"
+    - "ORIGINAL"
+    - "INITIAL"
+
+  # Tier 2 datetime-stamp filename veto (YYYYMMDD). When true, any filename
+  # containing a valid calendar date like "20251207" will be skipped.
+  datetime_stamp_yyyymmdd: true
+
+  # Tier 2 regex filename patterns (evaluated against filename only)
+  # Use SINGLE QUOTES.
+  patterns:
+    - '_v\d{1,2}\.py$'
+    - '^step\d{1,2}'
+    - '^utils_'
+    - '_backup\d*\.'
+    - '\.bak$'
+    - '~$'
+
+  # Tier 4 extension exclusions (applied only after Tier 3 directory scope)
   extensions:
-    # Images and documents
     - ".png"
     - ".jpg"
     - ".jpeg"
+    - ".gif"
+    - ".bmp"
+    - ".ico"
+    - ".svg"
     - ".pdf"
-    - ".md"  # Markdown files excluded except README.md
-
-    # Standard exclusions
     - ".log"
     - ".tmp"
     - ".cache"
@@ -66,98 +102,43 @@ blacklist:
     - ".dll"
     - ".exe"
     - ".bin"
-    - ".o"
-    - ".a"
-    - ".lib"
-
-    # Binary data formats
-    - ".gif"
-    - ".bmp"
-    - ".ico"
-    - ".svg"
-    - ".mp4"
-    - ".avi"
-    - ".mov"
-    - ".mp3"
-    - ".wav"
-
-    # Office documents
-    - ".docx"
-    - ".xlsx"
-    - ".pptx"
-    - ".doc"
-    - ".xls"
-    - ".ppt"
-
-    # Archives
     - ".zip"
     - ".tar"
     - ".gz"
     - ".7z"
     - ".rar"
 
-  # Python-compatible regex patterns for filename matching
-  # These patterns exclude versioned files, step files, and utility files
-  # IMPORTANT: Use single quotes for raw strings or escape backslashes
-  patterns:
-    # Versioned Python files: matches *_v1.py, *_v2.py, ..., *_v99.py
-    - '_v\d{1,2}\.py$'
-
-    # Step-numbered files: matches step1_*.py, step2_*.py, etc.
-    - '^step\d{1,2}'
-
-    # Utility files: matches utils_*.py
-    - '^utils_'
-
-    # Additional common patterns
-    - '_backup\d*\.'
-    - '\.bak$'
-    - '~$'
-
-  # Directories to exclude (even within whitelisted directories)
+  # Tier 4 directory exclusions (applied only after Tier 3 directory scope)
   directories:
     - ".git/"
-    - ".svn/"
-    - ".hg/"
-    - "node_modules/"
     - "__pycache__/"
     - ".pytest_cache/"
     - ".mypy_cache/"
     - ".tox/"
+    - ".venv/"
     - "venv/"
     - "env/"
-    - ".venv/"
-    - ".uv/"
-    - "build/"
+    - "node_modules/"
     - "dist/"
+    - "build/"
     - "*.egg-info/"
-    - "logs/"
-    - "temp/"
-    - "tmp/"
-    - "cache/"
-    - "coverage/"
-    - ".coverage/"
-    - "htmlcov/"
 
 # ============================================================================
-# DATA SAMPLING CONFIGURATION
+# DATA SAMPLING
 # ============================================================================
-# For large data files, copy only head + tail samples instead of full content
 data_sampling:
   enabled: true
 
-  # File extensions to sample (structured/semi-structured data)
+  # Structured / semi-structured formats eligible for sampling.
   target_extensions:
     - ".csv"
     - ".tsv"
     - ".json"
     - ".jsonl"
 
-  # For CSV/TSV: include header row (true recommended)
+  # CSV/TSV: keep first row as header
   include_header: true
 
-  # Number of rows/objects to include from the beginning
+  # Head/tail sizes (rows for CSV/TSV; objects for JSON array; lines for JSONL)
   head_rows: 5
-
-  # Number of rows/objects to include from the end
   tail_rows: 5

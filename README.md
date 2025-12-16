@@ -1,138 +1,160 @@
 # Repository Distiller
 
-**Version:** 1.0.1 (Path Resolution Fix)  
-**License:** MIT
+A deterministic CLI utility that creates **filtered, context-optimized copies** of source repositories for LLM/AI-assisted development. It applies a **Priority Cascade** (explicit includes, explicit vetoes, scope gating, and sanity exclusions) and supports **head/tail sampling** for structured data files.
 
-## Overview
+## Why this exists
 
-Repository Distiller is a command-line Python utility that creates intelligent, filtered copies of code repositories optimized for providing context to Large Language Models (LLMs) in AI-assisted coding workflows.
+Large repositories contain noise (build artifacts, caches, datasets, vendor trees) that waste tokens and degrade reasoning quality. Repository Distiller helps you:
 
-## Latest Update (v1.0.1)
+- Generate a minimal snapshot for LLM prompt context
+- Create small, shareable repro cases
+- Exclude sensitive artifacts reliably
+- Sample large datasets without copying them wholesale
 
-**FIXED:** Path resolution issue causing "not in the subpath" errors when using relative paths like `../project-name`. All paths are now properly resolved to absolute paths before processing.
+## Key features
 
-## Features
+- **Priority Cascade filtering**
+  - Tier 1: explicit file allowlist (“Golden Ticket”)
+  - Tier 2: explicit vetoes (files, regex patterns, date-stamps, substrings)
+  - Tier 3: whitelist-only directory scope gate
+  - Tier 4: general exclusions (directories, extensions, size)
+- **Data sampling** for `.csv`, `.tsv`, `.json`, `.jsonl`
+- **Cross-platform stable matching** using repo-relative POSIX paths
+- **Auditable results** with skip reason breakdowns and log files
+- **Dry run mode** for safe iteration
 
-- ✅ **Smart Filtering**: Configurable whitelist/blacklist rules with glob pattern support
-- ✅ **Whitelist-Only Mode**: Default blacklist-everything approach with explicit whitelisting
-- ✅ **Data Sampling**: Automatically sample large CSV/JSON/JSONL files (head + tail)
-- ✅ **Regex Patterns**: Filter versioned files, step-numbered scripts, and utility files
-- ✅ **Size Control**: Skip files over configurable size threshold
-- ✅ **Flexible Configuration**: YAML-based configuration with pattern matching
-- ✅ **Dry Run Mode**: Preview actions before executing
-- ✅ **Comprehensive Logging**: Dual-stream logging (console + file) with detailed statistics
-- ✅ **AI-Optimized**: Designed specifically for LLM context preparation
-- ✅ **Path Resolution**: Handles both relative and absolute paths correctly
+## Project status
 
-## Quick Start
+- Current version: **v1.1.1**
+- Python: **3.7+**
+- Dependencies: `PyYAML` (plus standard library)
 
-### Installation
+## Repository layout
+
+```text
+.
+├── config.yaml
+├── docs/
+├── src/
+├── tests/
+└── ...
+```
+
+## Setup
+
+### Option A: `uv` (recommended)
 
 ```bash
-# Clone or download this repository
-cd repo_distiller_project
-
-# Install with uv (recommended)
 uv sync
-
-# Or install dependencies manually
-uv add pyyaml
-
-# Verify installation
-uv run python src/repo_distiller.py --version
 ```
 
-### Basic Usage
+### Option B: pip
 
 ```bash
-# Distill a repository (from project root)
-# Works with both relative and absolute paths
-uv run python src/repo_distiller.py /path/to/source /path/to/destination
-uv run python src/repo_distiller.py ../my-project ./distilled-project
-
-# Dry run (preview only)
-uv run python src/repo_distiller.py ../source ./dest --dry-run
-
-# Verbose logging
-uv run python src/repo_distiller.py ../source ./dest --verbose
-
-# Custom configuration
-uv run python src/repo_distiller.py ../source ./dest --config my_config.yaml
+pip install -r requirements.txt
 ```
 
-## Changelog
+## Running
 
-### v1.0.1 (2025-12-14)
-- **FIXED:** Path resolution issue causing "not in the subpath" errors
-- All paths now properly resolved to absolute paths using `.resolve()`
-- Improved error handling for relative paths
-- Enhanced logging with better path display
+Basic usage:
 
-### v1.0.0 (2025-12-14)
-- Initial release
-- Core filtering engine with whitelist/blacklist support
-- Whitelist-only mode for secure filtering
-- Data sampling for CSV/JSON/JSONL files
-- Regex pattern matching for versioned files
-- Comprehensive logging and statistics
-- Dry run mode
-- YAML configuration
-- uv package manager support
+```bash
+uv run python src/repo_distiller.py <SOURCE_DIR> <DEST_DIR>
+```
 
-## Configuration Example
+Common options:
 
-This project uses a **whitelist-only approach** by default. Edit `config.yaml` to customize:
+```bash
+# Preview decisions without writing files
+uv run python src/repo_distiller.py ./my-repo ./distilled --dry-run
+
+# Verbose logging (DEBUG) + custom config
+uv run python src/repo_distiller.py ./my-repo ./distilled --verbose --config ./config.yaml
+
+# Choose a custom log directory
+uv run python src/repo_distiller.py ./my-repo ./distilled --log-dir ./logs
+```
+
+## Configuration
+
+The default `config.yaml` is extensively commented. Conceptually:
+
+### Tier 1 — `whitelist.files` (force-include)
+
+- Matches repo-relative paths (glob).
+- Bypasses:
+  - `blacklist.directories`
+  - `blacklist.extensions`
+  - `max_file_size_mb`
+
+Use Tier 1 for “I absolutely need this file” includes.
+
+### Tier 2 — explicit vetoes (force-exclude)
+
+Evaluated early to block sensitive/noisy files:
+
+- `blacklist.files` (glob, repo-relative path)
+- `blacklist.datetime_stamp_yyyymmdd` (filename contains a valid `YYYYMMDD`)
+- `blacklist.filename_substrings` (case-insensitive, filename contains token)
+- `blacklist.patterns` (regex against filename)
+
+### Tier 3 — `whitelist.directories` (scope gate)
+
+In whitelist-only mode, a file must live under at least one scope directory unless it is Tier 1-included.
+
+### Tier 4 — sanity exclusions (general noise reduction)
+
+Applied only after Tier 3 passes:
+
+- `blacklist.directories`
+- `blacklist.extensions`
+- `max_file_size_mb`
+
+### Data sampling
+
+Enable and tune:
 
 ```yaml
-# AI coding environment: 'chat', 'ide', 'agentic', 'cli'
-ai_coding_env: 'chat'
-
-# Maximum file size in MB (applied after whitelist)
-max_file_size_mb: 5
-
-# WHITELIST: Only these are included
-whitelist:
-  files:
-    - "README.md"
-    - "pyproject.toml"
-    - "config.yaml"
-  directories:
-    - "output/qa/step5_gold/"
-    - "src/"
-    - "src/qa_gold_lib/"
-
-# BLACKLIST: Exclude from whitelisted items
-blacklist:
-  extensions:
-    - ".png"
-    - ".jpg"
-    - ".pdf"
-    - ".md"  # Except README.md (explicitly whitelisted)
-
-  patterns:
-    - '_v\d{1,2}\.py$'      # Excludes: *_v1.py, *_v2.py, ..., *_v99.py
-    - '^step\d{1,2}'         # Excludes: step1_*, step2_*, ...
-    - '^utils_'               # Excludes: utils_*.py
-
-# Data sampling
 data_sampling:
   enabled: true
-  target_extensions: [".csv", ".json", ".jsonl"]
+  target_extensions: [".csv", ".tsv", ".json", ".jsonl"]
+  include_header: true
   head_rows: 5
   tail_rows: 5
 ```
 
+## Debugging & observability
+
+- Console output is concise.
+- A log file is always written (location printed at start).
+- Use `--verbose` for per-file evaluation details.
+
+Recommended workflow:
+
+1. Start with `--dry-run --verbose`
+2. Adjust config until the skip reason breakdown looks correct
+3. Run without `--dry-run` to generate the distilled output
+
+## Testing
+
+Install dev deps (if using `uv`, add `pytest`), then run:
+
+```bash
+pytest -q
+```
+
+Tests cover:
+- Tier ordering and precedence
+- Filename date-stamp and substring vetoes
+- Sampling behavior for CSV/JSON/JSONL
+- Integration: end-to-end distillation into a destination directory
+
 ## Documentation
 
-- **[User Manual](docs/user-manual.md)** - Complete usage guide, configuration reference, and troubleshooting
-- **[Technical Specification](docs/tech-specs.md)** - Architecture, API documentation, and extension guide
-
-## Requirements
-
-- Python 3.7+
-- uv package manager (recommended)
-- PyYAML (`uv add pyyaml`)
+- `docs/user-manual.md` — usage and troubleshooting
+- `docs/tech-specs.md` — architecture and decision model
 
 ## License
 
-MIT License - See LICENSE file for details.
+MIT (see `LICENSE`).
+

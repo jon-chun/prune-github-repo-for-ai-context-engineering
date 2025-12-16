@@ -1,260 +1,172 @@
-# Repository Distiller - User Manual
+# Repository Distiller — User Manual
 
-## Overview
+## 1. What this tool does
 
-Repository Distiller creates filtered copies of code repositories optimized for LLM context preparation.
+Repository Distiller creates a **new directory** containing a curated subset of a source repository. The output is intended for:
 
-**Version:** 1.0.1 (Path Resolution Fix)  
-**Updated:** 2025-12-14
+- LLM prompt context
+- code review snapshots
+- redacted / minimized repro cases
+- generating “clean-room” working sets
 
-## What's New in v1.0.1
+The tool is deterministic: given the same config and repo state, it will produce the same filtered output.
 
-**FIXED:** Major bug causing "not in the subpath" errors resolved. The distiller now correctly handles both relative paths (like `../project`) and absolute paths by resolving all paths to absolute before processing.
+## 2. Installation
 
-## Installation
+### 2.1 Requirements
 
-### Prerequisites
-- Python 3.7 or higher
-- uv package manager (recommended)
+- Python 3.7+
+- `PyYAML`
+- Recommended: `uv` (fast Python package manager)
 
-### Setup with uv
+### 2.2 Install dependencies
+
+Using `uv`:
+
 ```bash
-# Install uv if not already installed
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Clone or download the project
-cd repo_distiller_project
-
-# Install dependencies
 uv sync
-
-# Verify installation
-uv run python src/repo_distiller.py --version
 ```
 
-## Quick Start
+Or using pip:
 
-### Basic Usage
 ```bash
-# From project root with uv
-# Now works with BOTH relative and absolute paths!
-uv run python src/repo_distiller.py ../source-project ./dest-project
-uv run python src/repo_distiller.py /absolute/path/source /absolute/path/dest
-
-# Or without uv
-python src/repo_distiller.py ../source ./dest
+pip install -r requirements.txt
 ```
 
-### Common Options
+## 3. Running the distiller
 
-#### Dry Run (Preview Mode)
+From the repository root:
+
 ```bash
-uv run python src/repo_distiller.py ../source ./dest --dry-run
+uv run python src/repo_distiller.py <SOURCE_DIR> <DEST_DIR>
 ```
 
-#### Verbose Logging
+Common options:
+
+- `--dry-run` — show decisions without writing files
+- `--verbose` — debug logging
+- `--config PATH` — use a custom YAML config
+- `--log-dir PATH` — put logs in a custom folder
+
+Examples:
+
 ```bash
-uv run python src/repo_distiller.py ../source ./dest --verbose
+# Preview actions
+uv run python src/repo_distiller.py ./my-repo ./distilled --dry-run
+
+# Use a custom config and verbose logging
+uv run python src/repo_distiller.py ./my-repo ./distilled -c ./config.yaml --verbose
 ```
 
-#### Custom Configuration
-```bash
-uv run python src/repo_distiller.py ../source ./dest --config my_config.yaml
-```
+## 4. How filtering works (practical rules)
 
-## Configuration
+The filter engine uses a Priority Cascade:
 
-### YAML Configuration File
+1. **Tier 1 (whitelist.files)**: force-include a specific file, even if it lives under a generally excluded directory, has a blacklisted extension, or exceeds `max_file_size_mb`.
+2. **Tier 2 (explicit vetoes)**: force-exclude files matching:
+   - `blacklist.files`
+   - filename contains a valid `YYYYMMDD` date stamp (when enabled)
+   - filename contains any configured `filename_substrings` (case-insensitive)
+   - `blacklist.patterns` regex matches (filename only)
+3. **Tier 3 (whitelist.directories)**: whitelist-only safety gate — if the file isn’t inside an allowed directory, it’s skipped.
+4. **Tier 4 (general exclusions)**: applied only after Tier 3 passes:
+   - directory blacklist
+   - extension blacklist
+   - size cap
 
-The distiller uses `config.yaml` for all filtering rules.
+Finally, eligible data files are **sampled**, otherwise **copied**.
 
-**IMPORTANT: Regex Pattern Syntax**
+## 5. Configuration reference
 
-Regex patterns in YAML must use **single quotes** to avoid escaping issues:
+The default configuration file is `config.yaml`.
 
-```yaml
-# ✅ CORRECT: Single quotes for regex patterns
-blacklist:
-  patterns:
-    - '_v\d{1,2}\.py$'      # Matches: *_v1.py, *_v2.py, ..., *_v99.py
-    - '^step\d{1,2}'         # Matches: step1_*, step2_*, etc.
-    - '^utils_'               # Matches: utils_*.py
-
-# ❌ WRONG: Double quotes cause YAML parsing errors
-blacklist:
-  patterns:
-    - "_v\d{1,2}\.py$"      # ERROR: unknown escape character 'd'
-```
-
-### Configuration Sections
-
-#### 1. Whitelist Rules (Highest Priority)
-
-Only explicitly whitelisted files/directories are included (whitelist-only mode).
+### 5.1 Whitelist
 
 ```yaml
 whitelist:
   files:
     - "README.md"
-    - "pyproject.toml"
-    - "*.md"  # Glob pattern: all markdown files
+    - "src/repo_distiller.py"
   directories:
     - "src/"
-    - "output/qa/step5_gold/"
+    - "docs/"
 ```
 
-#### 2. Blacklist Rules
-
-Applied to files that ARE whitelisted for fine-grained exclusion.
+### 5.2 Blacklist
 
 ```yaml
 blacklist:
   files:
     - ".env"
-    - ".gitignore"
-
+  filename_substrings:
+    - "BACKUP"
+  datetime_stamp_yyyymmdd: true
+  patterns:
+    - '_v\d{1,2}\.py$'
   extensions:
     - ".png"
-    - ".jpg"
-    - ".pdf"
-
-  patterns:  # Use single quotes!
-    - '_v\d{1,2}\.py$'      # Versioned files
-    - '^step\d{1,2}'         # Step files
-    - '^utils_'               # Utility files
-
   directories:
     - ".git/"
-    - "node_modules/"
-    - "__pycache__/"
 ```
 
-#### 3. Data Sampling
+Guidance:
 
-For large data files, sample head + tail instead of full copy:
+- Prefer using Tier 2 `blacklist.files` / `blacklist.patterns` for “must not include” content.
+- Use Tier 4 `blacklist.directories` / `blacklist.extensions` for general noise reduction.
+- Treat `filename_substrings` carefully; short tokens can over-match.
+
+### 5.3 Data sampling
 
 ```yaml
 data_sampling:
   enabled: true
-  target_extensions:
-    - ".csv"
-    - ".json"
-    - ".jsonl"
-  include_header: true  # For CSV/TSV
+  target_extensions: [".csv", ".tsv", ".json", ".jsonl"]
+  include_header: true
   head_rows: 5
   tail_rows: 5
 ```
 
-## Regex Pattern Examples
+## 6. Understanding logs & skip reasons
 
-### Filter Versioned Files
+Each skipped file increments a reason counter. Typical reasons:
 
-```yaml
-patterns:
-  - '_v\d{1,2}\.py$'  # Single quotes required!
-```
+- `tier1_whitelist_file` / `tier1_whitelist_file_sampled`
+- `tier2_blacklist_file`
+- `tier2_blacklist_datetime_stamp:20251207`
+- `tier2_blacklist_filename_substring:BACKUP`
+- `tier2_blacklist_pattern:<pattern>`
+- `tier3_not_in_whitelist_scope`
+- `tier4_blacklist_directory`
+- `tier4_blacklist_ext:.png`
+- `tier4_file_size>5MB`
 
-**Matches:**
-- `adjudicate_gold_v1.py` ✗
-- `adjudicate_gold_v2.py` ✗
-- `adjudicate_gold.py` ✓ (no version suffix)
+Use `--verbose` to see per-file decisions in the log file.
 
-### Filter Step-Numbered Files
+## 7. Troubleshooting
 
-```yaml
-patterns:
-  - '^step\d{1,2}'  # Single quotes required!
-```
+### 7.1 “Why was my file skipped?”
 
-**Matches:**
-- `step1_generate_examples.py` ✗
-- `step2_filter_dataset.py` ✗
-- `process_step1.py` ✓ (doesn't start with "step")
+1. Run with `--dry-run --verbose`
+2. Check the log file path printed at startup
+3. Search for the file path and read its skip reason
 
-### Filter Utility Files
+### 7.2 YAML regex parsing errors
 
-```yaml
-patterns:
-  - '^utils_'  # Single quotes required!
-```
-
-**Matches:**
-- `utils_fix_annotator.py` ✗
-- `utils_helper.py` ✗
-- `data_utils.py` ✓ (doesn't start with "utils_")
-
-## Troubleshooting
-
-### v1.0.0 Error: "not in the subpath of"
-
-**Problem:** In v1.0.0, using relative paths like `../project` caused errors.
-
-**Solution:** Upgrade to v1.0.1 (this version). The path resolution issue is fixed.
-
-### "Invalid YAML: unknown escape character"
-
-**Problem:** Regex patterns use double quotes instead of single quotes.
-
-**Solution:** Change regex patterns to use single quotes:
+Use **single quotes** around regex strings:
 
 ```yaml
-# Before (causes error):
-patterns:
-  - "_v\d{1,2}\.py$"
-
-# After (correct):
 patterns:
   - '_v\d{1,2}\.py$'
 ```
 
-### Files not being copied as expected
+### 7.3 Destination directory overwrite prompt
 
-**Solution:** Run with `--verbose` and `--dry-run`:
+If the destination exists, the tool asks before deleting it. In CI environments, prefer:
+- pass a fresh destination directory, or
+- delete it before running
 
-```bash
-uv run python src/repo_distiller.py ../source ./dest --dry-run --verbose
-```
+## 8. Security notes
 
-### Permission errors
+- Treat configs as security controls. Tier 2 vetoes are intended to block secrets and private artifacts.
+- Always validate the distilled output before sharing externally.
 
-**Solution:** Ensure you have read access to source and write access to destination.
-
-## Output Summary
-
-After completion, you'll see a summary:
-
-```
-======================================================================
-DISTILLATION SUMMARY
-======================================================================
-Total files scanned:  156
-Files copied:         42
-Files sampled:        2
-Files skipped:        112
-Errors:               0
-
-Skip reasons breakdown:
-  blacklist_pattern:_v\d{1,2}\.py$  : 45
-  blacklist_pattern:^step\d{1,2}     : 28
-  blacklist_pattern:^utils_          : 12
-  blacklist_ext:.md                   : 18
-  not_whitelisted                     : 9
-======================================================================
-```
-
-## Exit Codes
-
-- `0`: Success
-- `1`: Error occurred
-- `130`: Operation cancelled by user (Ctrl+C)
-
-## Best Practices
-
-1. **Always use dry run first** for new configurations
-2. **Use single quotes** for regex patterns in YAML
-3. **Review the summary report** to verify expected files
-4. **Check log files** in `./logs/` for detailed troubleshooting
-
-## Support
-
-For technical details, see `docs/tech-specs.md`.

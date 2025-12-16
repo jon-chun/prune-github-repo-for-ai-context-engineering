@@ -1,4 +1,2 @@
-# Repository Distiller Requirements
-# Install with: pip install -r requirements.txt
-
-PyYAML>=6.0.1
+pyyaml
+pytest

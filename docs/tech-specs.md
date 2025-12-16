@@ -1,215 +1,147 @@
-# Repository Distiller - Technical Specification
+# Repository Distiller — Technical Specification
 
-**Version:** 1.0.1 (Path Resolution Fix)  
-**Updated:** 2025-12-14  
-**Module Location:** src/repo_distiller.py
+## 1. Purpose
 
-## Version History
+Repository Distiller is a Python CLI that produces a **filtered, context-optimized copy** of a source repository for LLM/AI-assisted development workflows. It applies an explicit **Priority Cascade** to decide whether each file is **copied verbatim**, **sampled**, or **skipped**.
 
-### v1.0.1 (2025-12-14) - Path Resolution Fix
-**Critical Bug Fix:**
-- **Issue:** Using relative paths like `../project-name` caused errors:
-  ```
-  '../project-name/file.py' is not in the subpath of '/current/working/dir'
-  ```
-- **Root Cause:** Paths weren't resolved to absolute paths before `Path.relative_to()` operations
-- **Fix:** Added `.resolve()` calls to convert all paths to absolute:
-  - In `parse_arguments()`: resolve source_dir, destination_dir, config, log_dir
-  - In `distill()`: resolve source_dir and dest_dir at method entry
-  - In path operations: ensure absolute paths before relative_to()
+Primary goals:
 
-**Changed Methods:**
-- `parse_arguments()` - Added path resolution for all arguments
-- `distill()` - Resolves paths to absolute at entry point
-- `_matches_glob_pattern()` - Added resolve() calls with comments
-- `_sample_csv_file()` - Added resolve() calls
-- `_sample_json_file()` - Added resolve() calls
-- `process_file()` - Added resolve() calls
+- Minimize prompt tokens by excluding noise and sampling large data files.
+- Preserve developer intent through explicit, deterministic precedence rules.
+- Provide auditable operation via structured skip reasons and detailed logs.
 
-### v1.0.0 (2025-12-14)
-- Initial release
+## 2. Architecture
 
-## System Architecture
+### 2.1 Module Layout
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                CLI Interface (main)                          │
-│  - Argument parsing (argparse)                              │
-│  - Path resolution (NEW in v1.0.1)                          │
-│  - Logging setup                                            │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────┐
-│          DistillerConfig (from YAML)                         │
-│  - Configuration loading                                    │
-│  - Validation and normalization                             │
-│  - Regex pattern compilation                                │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────┐
-│      RepositoryDistiller (Core Logic)                        │
-│  - File system traversal                                    │
-│  - Rule application (whitelist → blacklist → sampling)      │
-│  - File processing (copy/sample/skip)                       │
-│  - Path resolution (NEW in v1.0.1)                          │
-│  - Statistics tracking                                      │
-└─────────────────────────────────────────────────────────────┘
-```
+- `src/repo_distiller.py` — All core logic and CLI entrypoint.
+- `config.yaml` — Default configuration.
+- `docs/` — User manual and this tech spec.
+- `tests/` — Pytest unit/integration tests.
 
-## Critical Path Resolution Implementation
+### 2.2 Key Types
 
-### Problem Statement
-Python's `Path.relative_to()` requires both paths to be in the same resolution state (both relative or both absolute). Using relative paths like `../project` with `Path.cwd()` caused:
+#### `FilterAction` (Enum)
 
-```
-ValueError: '../project/file.py' is not in the subpath of '/absolute/path'
-```
+- `COPY` — copy file verbatim to destination
+- `SAMPLE` — copy a reduced representation (head/tail) to destination
+- `SKIP` — do not copy
 
-### Solution
-All paths are resolved to absolute paths using `.resolve()` before any relative path operations:
+#### `FilterStats` (Dataclass)
 
-```python
-# In parse_arguments():
-args.source_dir = args.source_dir.resolve()
-args.destination_dir = args.destination_dir.resolve()
-args.config = args.config.resolve()
-args.log_dir = args.log_dir.resolve()
+Tracks:
 
-# In distill():
-source_dir = source_dir.resolve()
-dest_dir = dest_dir.resolve()
+- scanned, copied, sampled, skipped, errors
+- `skipped_reasons: Dict[str, int]` aggregated by reason strings
 
-# In _matches_glob_pattern():
-path = path.resolve()
-base_path = base_path.resolve()
-rel_path = path.relative_to(base_path)  # Now works!
-```
+#### `DistillerConfig` (Dataclass)
 
-## Key Classes
+Represents parsed configuration and precompiled regex patterns.
 
-### FilterAction (Enum)
-```python
-class FilterAction(Enum):
-    COPY = "COPY"      # Copy file verbatim
-    SAMPLE = "SAMPLE"  # Sample data file (head + tail)
-    SKIP = "SKIP"      # Skip file entirely
-```
+Key config groups:
 
-### FilterStats (Dataclass)
-```python
-@dataclass
-class FilterStats:
-    scanned: int = 0
-    copied: int = 0
-    sampled: int = 0
-    skipped: int = 0
-    errors: int = 0
-    skipped_reasons: Dict[str, int] = field(default_factory=dict)
-```
+- Whitelist: `whitelist_files`, `whitelist_directories`
+- Blacklist: `blacklist_files`, `blacklist_patterns`, `blacklist_extensions`, `blacklist_directories`
+- Filename vetoes: `blacklist_filename_substrings`, `blacklist_datetime_stamp_yyyymmdd`
+- Sampling: enablement and per-format parameters
 
-### RepositoryDistiller (Main Engine)
+## 3. Priority Cascade Decision Model
 
-**Public Methods:**
-- `distill(source_dir, dest_dir, dry_run)` - Main entry point (v1.0.1: resolves paths)
-- `determine_action(path, base_path)` - Apply filtering rules
-- `process_file(source, destination, action)` - Execute action (v1.0.1: resolves paths)
+The decision engine is implemented in `RepositoryDistiller.determine_action()`.
 
-**Private Methods:**
-- `_matches_glob_pattern()` - Glob pattern matching (v1.0.1: resolves paths)
-- `_is_whitelisted()` - Whitelist check
-- `_is_blacklisted()` - Blacklist check with reason
-- `_should_sample_data_file()` - Data sampling check
-- `_sample_csv_file()` - CSV sampling (v1.0.1: resolves paths)
-- `_sample_json_file()` - JSON/JSONL sampling (v1.0.1: resolves paths)
+### Tier 1 — Golden Ticket: `whitelist.files`
 
-## Configuration File Format
+If the repository-relative file path matches `whitelist.files` (glob), the file is **force-included**:
 
-### YAML Schema
+- The file is copied or sampled (if eligible).
+- **Bypasses**: `blacklist.directories`, `blacklist.extensions`, and `max_file_size_mb`.
 
-```yaml
-ai_coding_env: str  # 'chat', 'ide', 'agentic', 'cli'
-max_file_size_mb: float
+Rationale: Explicit file includes should be honored even if they live in generally excluded areas.
 
-whitelist:
-  files: List[str]        # Glob patterns
-  directories: List[str]  # Glob patterns
+### Tier 2 — Explicit Veto: filename-level blacklists
 
-blacklist:
-  files: List[str]        # Glob patterns
-  extensions: List[str]   # Leading dot normalized
-  patterns: List[str]     # Python regex (use single quotes!)
-  directories: List[str]  # Glob patterns
+Tier 2 checks are evaluated against the **filename** (not the full path), unless explicitly stated.
 
-data_sampling:
-  enabled: bool
-  target_extensions: List[str]
-  include_header: bool
-  head_rows: int
-  tail_rows: int
-```
+A file is skipped immediately if any Tier 2 veto triggers:
 
-### Regex Pattern Guidelines
+1. `blacklist.files` (glob match against repo-relative path)
+2. Datetime stamp in filename (`YYYYMMDD`), when enabled (`blacklist.datetime_stamp_yyyymmdd`)
+3. Case-insensitive “contains” match against `blacklist.filename_substrings`
+4. `blacklist.patterns` (regex evaluated against filename)
 
-**CRITICAL:** Use **single quotes** for regex patterns in YAML:
+Rationale: Tier 2 rules provide a security/noise “kill switch” for sensitive or irrelevant files.
 
-```yaml
-# ✅ CORRECT
-patterns:
-  - '_v\d{1,2}\.py$'
-  - '^step\d{1,2}'
-  - '^utils_'
+### Tier 3 — Scope Gate: `whitelist.directories`
 
-# ❌ WRONG - causes YAML parsing error
-patterns:
-  - "_v\d{1,2}\.py$"  # ERROR: unknown escape character 'd'
-```
+Whitelist-only safety is enforced via a directory scope check:
 
-## Running the Tool
+- If the file is not under a whitelisted directory, the result is `SKIP` with reason `tier3_not_in_whitelist_scope`.
 
-### With uv (Recommended)
-```bash
-# From project root - now works with relative paths!
-uv run python src/repo_distiller.py ../source ./dest [options]
+Tier 1 can still include a file outside these directories.
 
-# Development mode
-uv sync --all-extras
-```
+### Tier 4 — Sanity Exclusions: general skip rules
 
-### Without uv
-```bash
-# Activate virtual environment
-python -m venv venv
-source venv/bin/activate
+Tier 4 rules apply only after Tier 3 passes:
 
-# Install dependencies
-pip install pyyaml
+1. `blacklist.directories` (repo-relative path prefix checks)
+2. `blacklist.extensions`
+3. `max_file_size_mb` (file size cap in MB)
 
-# Run
-python src/repo_distiller.py ../source ./dest [options]
-```
+If any rule triggers, the file is skipped with a Tier 4 reason.
 
-## Debugging Common Issues
+### Final decision — Sampling vs Copy
 
-### v1.0.1 Path Resolution
+If the file is eligible for sampling (`data_sampling.enabled` and extension is in `data_sampling.target_extensions`):
 
-**Diagnostic Commands:**
-```bash
-# Test with absolute paths
-uv run python src/repo_distiller.py   /absolute/path/to/source   /absolute/path/to/dest   --dry-run -v
+- return `SAMPLE`
+- otherwise return `COPY`
 
-# Test with relative paths (now works!)
-uv run python src/repo_distiller.py   ../source-project   ./dest-project   --dry-run -v
-```
+## 4. Sampling Semantics
 
-**If you still see path errors:**
-1. Check that source directory exists: `ls -la ../source-project`
-2. Check permissions: `ls -ld ../source-project`
-3. Verify you're running v1.0.1: `uv run python src/repo_distiller.py --version`
+### CSV / TSV
 
----
+- Streams the file row-by-row.
+- Output includes:
+  - optional header row
+  - first `head_rows` data rows
+  - a single separator line indicating omitted row count
+  - last `tail_rows` data rows
+- If the file is small enough (≤ head_rows + tail_rows [+ header]), it is copied intact.
 
-**Document Version**: 1.0.1  
-**Last Updated**: 2025-12-14  
-**Optimized for**: AI-assisted coding with uv + path resolution fix
+### JSONL
+
+- Streams line-by-line.
+- Preserves first N non-empty lines and last M non-empty lines.
+- Inserts an omission marker.
+
+### JSON
+
+- If the top-level JSON value is an array: writes a sampled wrapper:
+  - metadata fields (`_sampled`, `_total_items`, `_omitted_items`)
+  - `head` and `tail` arrays
+- If it is an object or primitive: copied intact.
+
+## 5. Path Handling & Normalization
+
+- All working paths are resolved to absolute paths prior to relative computations to avoid `Path.relative_to()` failures across mixed absolute/relative inputs.
+- All matching is performed against repository-relative **POSIX** strings for stable cross-platform behavior.
+
+## 6. Logging
+
+Two handlers are configured:
+
+- Console: concise, INFO by default
+- File: detailed, DEBUG
+
+Each skip includes an attributable reason string, and the run prints an aggregated breakdown.
+
+## 7. Performance Considerations
+
+- Sampling avoids loading JSONL and delimited files entirely into memory.
+- Directory walking uses `Path.rglob('*')`; filtering happens per-file.
+
+## 8. Known Tradeoffs
+
+- Tier 2 substring vetoes are intentionally broad “contains” matches; short tokens (e.g., `BU`) can over-match.
+- `whitelist.directories` is a scope gate, not a copy-list: Tier 4 may still exclude files within scope.
+
